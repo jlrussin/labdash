@@ -1,0 +1,28 @@
+{
+  "participant_id": "demo_001",
+  "condition": "control",
+  "completed": true,
+  "test_run": false,
+  "trials": [
+    {"phase": "training", "trial_index": 0, "rt": 487, "correct": true, "difficulty": "easy"},
+    {"phase": "training", "trial_index": 1, "rt": 612, "correct": true, "difficulty": "medium"},
+    {"phase": "training", "trial_index": 2, "rt": 743, "correct": false, "difficulty": "hard"},
+    {"phase": "training", "trial_index": 3, "rt": 423, "correct": true, "difficulty": "easy"},
+    {"phase": "training", "trial_index": 4, "rt": 558, "correct": true, "difficulty": "medium"},
+    {"phase": "training", "trial_index": 5, "rt": 691, "correct": false, "difficulty": "hard"},
+    {"phase": "training", "trial_index": 6, "rt": 402, "correct": true, "difficulty": "easy"},
+    {"phase": "training", "trial_index": 7, "rt": 534, "correct": true, "difficulty": "medium"},
+    {"phase": "training", "trial_index": 8, "rt": 378, "correct": true, "difficulty": "easy"},
+    {"phase": "training", "trial_index": 9, "rt": 601, "correct": false, "difficulty": "hard"},
+    {"phase": "training", "trial_index": 10, "rt": 445, "correct": true, "difficulty": "easy"},
+    {"phase": "training", "trial_index": 11, "rt": 523, "correct": true, "difficulty": "medium"},
+    {"phase": "training", "trial_index": 12, "rt": 367, "correct": true, "difficulty": "easy"},
+    {"phase": "training", "trial_index": 13, "rt": 589, "correct": true, "difficulty": "medium"},
+    {"phase": "training", "trial_index": 14, "rt": 712, "correct": false, "difficulty": "hard"},
+    {"phase": "test", "trial_index": 15, "rt": 456, "correct": true, "difficulty": "easy"},
+    {"phase": "test", "trial_index": 16, "rt": 634, "correct": true, "difficulty": "medium"},
+    {"phase": "test", "trial_index": 17, "rt": 778, "correct": false, "difficulty": "hard"},
+    {"phase": "test", "trial_index": 18, "rt": 412, "correct": true, "difficulty": "easy"},
+    {"phase": "test", "trial_index": 19, "rt": 567, "correct": true, "difficulty": "medium"}
+  ]
+}

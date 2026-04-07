@@ -1,0 +1,14 @@
+groups:
+  Distributions:
+  - rt_histogram
+  Learning:
+  - learning_curve
+  Performance:
+  - accuracy_by_difficulty
+tags:
+- accuracy
+- difficulty
+- distribution
+- learning
+- rt
+- time-course

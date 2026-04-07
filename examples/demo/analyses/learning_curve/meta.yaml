@@ -1,0 +1,14 @@
+title: "Learning Curve"
+group: "Learning"
+order: 1
+description: >
+  Accuracy over trial index with a rolling-average trend line,
+  showing whether performance improves across the session.
+methodology: >
+  Each trial is plotted as correct (1) or incorrect (0). A rolling
+  average with a window of 5 trials is overlaid to show the trend.
+tags: [learning, accuracy, time-course]
+status: active
+output_format: png
+figure_id: ""
+caption: ""

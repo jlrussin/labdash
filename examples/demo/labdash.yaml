@@ -1,0 +1,8 @@
+project_name: "LabDash Demo"
+data_dir: "data"
+analyses_dir: "analyses"
+output_dir: "_output"
+default_format: png
+publication_format: svg
+publication_dpi: 300
+server_port: 8800

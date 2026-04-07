@@ -1,0 +1,1457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LabDash</title>
+<style>
+/* ── Reset & Base ──────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 15px; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1a1a2e;
+    background: #f5f6fa;
+    display: flex;
+    min-height: 100vh;
+}
+
+/* ── Sidebar ───────────────────────────────────────────── */
+.sidebar {
+    width: 260px;
+    min-width: 260px;
+    background: #fff;
+    border-right: 1px solid #e0e0e0;
+    padding: 1.2rem;
+    overflow-y: auto;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+}
+.sidebar h1 {
+    font-size: 1.3rem;
+    margin-bottom: 1rem;
+    color: #2c3e50;
+}
+.sidebar-section { margin-bottom: 1.2rem; }
+.sidebar-section h3 {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #7f8c8d;
+    margin-bottom: 0.5rem;
+}
+
+/* Search */
+.search-box {
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+}
+.search-box:focus { outline: none; border-color: #3498db; }
+
+/* Filters */
+.filter-group { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.filter-btn {
+    padding: 0.2rem 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    background: #fff;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.filter-btn:hover { border-color: #3498db; }
+.filter-btn.active { background: #3498db; color: #fff; border-color: #3498db; }
+
+/* Group nav */
+.group-nav { list-style: none; }
+.group-nav li {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.85rem;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.group-nav li:hover { background: #f0f0f0; }
+.group-nav li.active { background: #ebf5fb; color: #2980b9; font-weight: 500; }
+.group-count {
+    float: right;
+    font-size: 0.75rem;
+    color: #aaa;
+}
+
+/* ── Main Content ──────────────────────────────────────── */
+.main {
+    flex: 1;
+    padding: 1.5rem 2rem;
+    max-width: 1100px;
+}
+.main-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+}
+.main-header h2 { font-size: 1.1rem; color: #2c3e50; }
+.card-count { font-size: 0.85rem; color: #7f8c8d; }
+
+/* ── Cards ─────────────────────────────────────────────── */
+.card {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+    transition: box-shadow 0.2s;
+}
+.card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+.card.focused { box-shadow: 0 0 0 2px #3498db; }
+.card.drag-over { border-top: 3px solid #3498db; margin-top: -3px; }
+.card[draggable="true"] .card-header { cursor: grab; }
+.card[draggable="true"] .card-header:active { cursor: grabbing; }
+.card.dragging { opacity: 0.4; }
+.card-header {
+    padding: 1rem 1.2rem;
+    border-bottom: 1px solid #f0f0f0;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    cursor: pointer;
+    user-select: none;
+}
+.card.collapsed .card-header { border-bottom: none; }
+.card-body { transition: none; }
+.card.collapsed .card-body { display: none; }
+.card-collapse-icon {
+    font-size: 0.6rem;
+    color: #bbb;
+    margin-right: 0.5rem;
+    transition: transform 0.2s;
+    display: inline-block;
+}
+.card.collapsed .card-collapse-icon { transform: rotate(-90deg); }
+.card-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: #2c3e50;
+}
+.card-badges { display: flex; gap: 0.4rem; align-items: center; flex-shrink: 0; }
+.badge {
+    padding: 0.15rem 0.45rem;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    text-transform: uppercase;
+}
+.badge-draft { background: #fef3cd; color: #856404; }
+.badge-active { background: #d1ecf1; color: #0c5460; }
+.badge-publication { background: #d4edda; color: #155724; }
+.status-badge { cursor: pointer; }
+.status-badge:hover { filter: brightness(0.9); }
+.badge-stale {
+    background: #f8d7da;
+    color: #721c24;
+    font-size: 0.65rem;
+}
+.badge-figure-id {
+    background: #e8e0f0;
+    color: #4a2d6e;
+    font-family: monospace;
+}
+
+.card-description {
+    padding: 0.8rem 1.2rem;
+    font-size: 0.9rem;
+    color: #555;
+    line-height: 1.5;
+}
+
+/* Output area */
+.card-output {
+    padding: 0.5rem 1.2rem;
+    text-align: center;
+}
+.card-output img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+}
+
+/* Image action buttons */
+.img-actions {
+    display: flex;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0 0.2rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+.card-output:hover .img-actions { opacity: 1; }
+.img-action-btn {
+    padding: 0.2rem 0.6rem;
+    background: #f0f0f0;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    color: #555;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.img-action-btn:hover { background: #e0e0e0; color: #333; }
+.card-output-table-wrapper {
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 500px;
+}
+.card-output table {
+    margin: 0 auto;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    width: 100%;
+    table-layout: auto;
+}
+.card-output th {
+    padding: 0.4rem 0.8rem;
+    border: 1px solid #ddd;
+    text-align: left;
+    white-space: nowrap;
+}
+.card-output td {
+    padding: 0.4rem 0.8rem;
+    border: 1px solid #ddd;
+    text-align: left;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    max-width: 500px;
+}
+.card-output th { background: #f8f9fa; font-weight: 600; }
+.no-output {
+    padding: 2rem;
+    color: #aaa;
+    font-style: italic;
+}
+
+/* Expandable sections */
+.expandable { border-top: 1px solid #f0f0f0; }
+.expandable-header {
+    padding: 0.6rem 1.2rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #7f8c8d;
+    transition: background 0.15s;
+}
+.expandable-header:hover { background: #f8f9fa; }
+.expandable-header .arrow {
+    transition: transform 0.2s;
+    font-size: 0.7rem;
+}
+.expandable.open .expandable-header .arrow { transform: rotate(90deg); }
+.expandable-body {
+    display: none;
+    padding: 0 1.2rem 1rem;
+}
+.expandable.open .expandable-body { display: block; }
+
+/* Methodology */
+.methodology-text {
+    font-size: 0.85rem;
+    line-height: 1.6;
+    color: #555;
+}
+
+/* Code */
+.code-container { position: relative; }
+.code-block {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    padding: 1rem;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    max-height: 500px;
+    overflow-y: auto;
+}
+.copy-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 3px;
+    color: #cdd6f4;
+    font-size: 0.7rem;
+    cursor: pointer;
+}
+.copy-btn:hover { background: rgba(255,255,255,0.2); }
+
+/* Notes */
+.notes-expandable .expandable-body {
+    background: #fffef5;
+}
+.notes-header-label {
+    color: #b8860b;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+.notes-dot {
+    width: 6px; height: 6px;
+    background: #b8860b;
+    border-radius: 50%;
+    display: inline-block;
+}
+.notes-content {
+    font-size: 0.85rem;
+    line-height: 1.5;
+    color: #666;
+}
+.notes-content p { margin-bottom: 0.5rem; }
+.notes-empty {
+    font-size: 0.85rem;
+    color: #bbb;
+    font-style: italic;
+}
+.notes-textarea {
+    width: 100%;
+    min-height: 120px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    padding: 0.6rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    resize: vertical;
+    background: #fff;
+    color: #333;
+}
+.notes-textarea:focus { outline: none; border-color: #b8860b; }
+.notes-btn-bar {
+    display: flex;
+    gap: 0.4rem;
+    padding-top: 0.4rem;
+}
+
+/* Agent notes */
+.agent-notes-expandable .expandable-body {
+    background: #f8f8fc;
+}
+.agent-notes-header-label {
+    color: #7c7ca8;
+    font-style: italic;
+}
+.agent-notes-content {
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: #777;
+    font-family: "SF Mono", "Fira Code", monospace;
+}
+.agent-notes-content ul { padding-left: 1.2rem; }
+.agent-notes-content li { margin-bottom: 0.3rem; }
+
+/* Tags (main rules in hover-visible section below) */
+.tag {
+    padding: 0.1rem 0.4rem;
+    background: #f0f0f0;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    color: #888;
+}
+
+/* ── Stats summary ─────────────────────────────────────── */
+.stats-summary {
+    padding: 0.5rem 1.2rem;
+    font-size: 0.8rem;
+    color: #666;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+.stat-item { display: flex; gap: 0.3rem; }
+.stat-label { font-weight: 500; color: #888; }
+.stat-value { font-family: monospace; }
+
+/* ── Buttons (used by live mode) ────────────────────────── */
+.btn {
+    padding: 0.3rem 0.8rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-run { background: #27ae60; color: #fff; border-color: #27ae60; }
+.btn-run:hover:not(:disabled) { background: #219a52; }
+.btn-save { background: #3498db; color: #fff; border-color: #3498db; }
+.btn-save:hover:not(:disabled) { background: #2980b9; }
+.btn-edit { background: #f39c12; color: #fff; border-color: #f39c12; }
+.btn-edit:hover:not(:disabled) { background: #d68910; }
+.btn-cancel { background: #95a5a6; color: #fff; border-color: #95a5a6; }
+.btn-cancel:hover:not(:disabled) { background: #7f8c8d; }
+
+.error-display {
+    padding: 1rem 1.2rem;
+    background: #fff5f5;
+    border-top: 2px solid #e74c3c;
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: #c0392b;
+    white-space: pre-wrap;
+    display: none;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* ── Run overlay ───────────────────────────────────────── */
+.run-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    border-radius: 4px;
+}
+.run-overlay .spinner {
+    width: 24px; height: 24px;
+    border: 3px solid #ddd;
+    border-top-color: #27ae60;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.card-output { position: relative; }
+
+/* ── Keyboard shortcut hint ────────────────────────────── */
+.keyboard-hint {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    padding: 0.5rem 0.8rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+}
+.keyboard-hint.visible { opacity: 1; }
+
+/* ── Data filter badge ─────────────────────────────────── */
+.data-badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 0.8rem;
+}
+.data-badge-test { background: #fef3cd; color: #856404; }
+.data-badge-prod { background: #d4edda; color: #155724; }
+.data-badge-all { background: #d1ecf1; color: #0c5460; }
+
+/* ── Group subtitle on cards ──────────────────────────── */
+.card-group-label {
+    font-size: 0.72rem;
+    color: #999;
+    padding: 0 1.2rem 0.2rem;
+}
+
+/* ── Hover-visible tags ──────────────────────────────── */
+.card-tags {
+    padding: 0.4rem 1.2rem 0.8rem;
+    display: flex;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+    opacity: 0.3;
+    transition: opacity 0.2s;
+}
+.card:hover .card-tags, .card.focused .card-tags { opacity: 1; }
+
+/* ── Shared code sidebar ─────────────────────────────── */
+.lib-file-item {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.8rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background 0.15s;
+}
+.lib-file-item:hover { background: #f0f0f0; }
+.lib-code-panel {
+    display: none;
+    position: fixed;
+    top: 0; right: 0;
+    width: 50vw;
+    height: 100vh;
+    background: #1e1e2e;
+    z-index: 100;
+    overflow-y: auto;
+    box-shadow: -4px 0 20px rgba(0,0,0,0.2);
+}
+.lib-code-panel.open { display: block; }
+.lib-code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.8rem 1rem;
+    background: #2d2d44;
+    color: #cdd6f4;
+    font-family: "SF Mono", monospace;
+    font-size: 0.85rem;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.lib-code-close {
+    background: none;
+    border: none;
+    color: #cdd6f4;
+    font-size: 1.2rem;
+    cursor: pointer;
+    padding: 0.2rem 0.5rem;
+}
+.lib-code-close:hover { color: #fff; }
+.lib-code-body {
+    padding: 1rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: #cdd6f4;
+}
+
+/* ── Editable group/tag UI ────────────────────────────── */
+.card-group-label {
+    cursor: pointer;
+    position: relative;
+    display: inline-block;
+}
+.card-group-label:hover { color: #666; text-decoration: underline dotted; }
+.group-dropdown {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 50;
+    min-width: 160px;
+    max-height: 200px;
+    overflow-y: auto;
+    display: none;
+}
+.group-dropdown.open { display: block; }
+.group-dropdown-item {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.group-dropdown-item:hover { background: #f0f0f0; }
+.group-dropdown-item.active { background: #ebf5fb; color: #2980b9; font-weight: 500; }
+.group-dropdown-input {
+    width: calc(100% - 1rem);
+    margin: 0.3rem 0.5rem;
+    padding: 0.3rem 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-size: 0.8rem;
+}
+.tag-remove {
+    cursor: pointer;
+    margin-left: 0.2rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+    font-size: 0.65rem;
+}
+.card:hover .tag-remove, .card.focused .tag-remove { opacity: 0.6; }
+.tag-remove:hover { opacity: 1; color: #e74c3c; }
+.tag-add-btn {
+    padding: 0.1rem 0.4rem;
+    background: none;
+    border: 1px dashed #ccc;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    color: #aaa;
+    cursor: pointer;
+}
+.tag-add-btn:hover { border-color: #999; color: #666; }
+.tag-add-input {
+    padding: 0.1rem 0.3rem;
+    border: 1px solid #3498db;
+    border-radius: 2px;
+    font-size: 0.7rem;
+    width: 80px;
+    outline: none;
+}
+
+/* ── Pygments syntax highlighting ──────────────────────── */
+{{ pygments_css }}
+.highlight { background: transparent !important; }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+    <h1>LabDash</h1>
+    {% if project_name %}<div style="font-size:0.75rem;color:#999;margin-top:-0.6rem;margin-bottom:0.6rem;">{{ project_name }}</div>{% endif %}
+    <span class="data-badge data-badge-{{ data_filter }}">{{ data_filter }} data</span>
+
+    <input type="text" class="search-box" placeholder="Search analyses..." id="searchBox">
+
+    <div class="sidebar-section">
+        <h3>Status</h3>
+        <div class="filter-group" id="statusFilters">
+            <button class="filter-btn active" data-filter="all">All ({{ total_count }})</button>
+            {% for status in all_statuses %}
+            <button class="filter-btn" data-filter="{{ status }}">{{ status | capitalize }}</button>
+            {% endfor %}
+            <button class="filter-btn" data-filter="stale">Stale</button>
+        </div>
+    </div>
+
+    <div class="sidebar-section">
+        <h3>Groups</h3>
+        <ul class="group-nav" id="groupNav">
+            <li class="active" data-group="all">All groups <span class="group-count">{{ total_count }}</span></li>
+            {% for group_name, group_cards in groups.items() %}
+            <li data-group="{{ group_name }}">{{ group_name }} <span class="group-count">{{ group_cards | length }}</span></li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    {% if all_tags %}
+    <div class="sidebar-section">
+        <h3>Tags</h3>
+        <div class="filter-group" id="tagFilters">
+            {% for tag in all_tags %}
+            <button class="filter-btn" data-tag="{{ tag }}">{{ tag }}</button>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="sidebar-section">
+        <button class="filter-btn" onclick="resetCardOrder()" id="resetOrderBtn" style="display:none;">Reset order</button>
+    </div>
+
+    {% if lib_files %}
+    <div class="sidebar-section">
+        <h3>Shared Code</h3>
+        {% for lf in lib_files %}
+        <div class="lib-file-item" onclick="openLibFile('{{ lf.name }}')">{{ lf.name }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</nav>
+
+<!-- Shared code slide-out panel -->
+<div class="lib-code-panel" id="libCodePanel">
+    <div class="lib-code-header">
+        <span id="libCodeTitle"></span>
+        <button class="lib-code-close" onclick="closeLibPanel()">&times;</button>
+    </div>
+    <div class="lib-code-body">
+        <pre><code class="highlight" id="libCodeContent"></code></pre>
+    </div>
+</div>
+
+<!-- Main Content -->
+<main class="main">
+    <div class="main-header">
+        <h2 id="currentView">All Analyses</h2>
+        <span class="card-count" id="cardCount">{{ total_count }} analyses</span>
+    </div>
+
+    {% for card in cards %}
+    <div class="card"
+         data-slug="{{ card.slug }}"
+         data-group="{{ card.group }}"
+         data-status="{{ card.status }}"
+         data-tags="{{ card.tags | join(',') }}"
+         id="card-{{ card.slug }}">
+
+        <div class="card-header" onclick="toggleCard(this)">
+            <span class="card-title"><span class="card-collapse-icon">&#9660;</span>{{ card.title }}</span>
+            <div class="card-badges">
+                {% if card.figure_id %}<span class="badge badge-figure-id">{{ card.figure_id }}</span>{% endif %}
+                {% if card.stale %}<span class="badge badge-stale">stale</span>{% endif %}
+                <span class="badge badge-{{ card.status }} status-badge" data-slug="{{ card.slug }}" onclick="event.stopPropagation(); cycleStatus(this)" title="Click to change status">{{ card.status }}</span>
+            </div>
+        </div>
+
+        <div class="card-body">
+        <div class="card-group-label" data-slug="{{ card.slug }}" onclick="event.stopPropagation(); openGroupDropdown(this)">{{ card.group }}</div>
+        <div class="card-description">{{ card.description }}</div>
+
+        <div class="card-output" data-slug="{{ card.slug }}">
+            {% if card.output_image %}
+                <img src="{{ card.output_image }}" alt="{{ card.title }}">
+                <div class="img-actions">
+                    <button class="img-action-btn" onclick="copyFigure(this)">Copy Figure</button>
+                    <button class="img-action-btn" onclick="openFigure(this)">Open in Window</button>
+                </div>
+            {% elif card.output_table_html %}
+                <div class="card-output-table-wrapper">{{ card.output_table_html }}</div>
+            {% else %}
+                <div class="no-output">No output yet — run this analysis first</div>
+            {% endif %}
+        </div>
+
+        <div class="error-display" id="error-{{ card.slug }}"></div>
+
+        {% if card.stats %}
+        <div class="expandable" id="stats-{{ card.slug }}">
+            <div class="expandable-header" onclick="toggleExpand(this)">
+                <span>Statistics</span>
+                <span class="arrow">&#9654;</span>
+            </div>
+            <div class="expandable-body">
+                <div class="stats-summary">
+                    {% for key, value in card.stats.items() if not key.startswith('_') %}
+                    {% if value is mapping %}
+                    {% else %}
+                    <div class="stat-item">
+                        <span class="stat-label">{{ key }}:</span>
+                        <span class="stat-value">{{ value }}</span>
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Methodology (expandable) -->
+        {% if card.methodology %}
+        <div class="expandable" id="methodology-{{ card.slug }}">
+            <div class="expandable-header" onclick="toggleExpand(this)">
+                <span>Methodology</span>
+                <span class="arrow">&#9654;</span>
+            </div>
+            <div class="expandable-body">
+                <div class="methodology-text">{{ card.methodology }}</div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Code (expandable) -->
+        <div class="expandable" id="code-{{ card.slug }}">
+            <div class="expandable-header" onclick="toggleExpand(this)">
+                <span>Code</span>
+                <span class="arrow">&#9654;</span>
+            </div>
+            <div class="expandable-body">
+                <div class="code-container">
+                    <button class="copy-btn" onclick="copyCode(this, '{{ card.slug }}')">Copy</button>
+                    <pre class="code-block"><code class="highlight" id="code-content-{{ card.slug }}">{{ card.code_highlighted }}</code></pre>
+                </div>
+                <div class="editor-container" id="editor-{{ card.slug }}"></div>
+            </div>
+        </div>
+
+        <div class="expandable notes-expandable" id="notes-{{ card.slug }}">
+            <div class="expandable-header" onclick="toggleExpand(this)">
+                <span class="notes-header-label">Notes{% if card.notes_html %} <span class="notes-dot"></span>{% endif %}</span>
+                <span class="arrow">&#9654;</span>
+            </div>
+            <div class="expandable-body">
+                <div class="notes-display" id="notes-display-{{ card.slug }}">
+                    {% if card.notes_html %}
+                    <div class="notes-content">{{ card.notes_html }}</div>
+                    {% else %}
+                    <div class="notes-empty">No notes yet. Click Edit to add notes.</div>
+                    {% endif %}
+                </div>
+                <div class="notes-editor-area" id="notes-editor-{{ card.slug }}" style="display:none;">
+                    <textarea class="notes-textarea" id="notes-textarea-{{ card.slug }}">{{ card.notes_raw | default('', true) | e }}</textarea>
+                </div>
+                <div class="notes-btn-bar">
+                    <button class="img-action-btn" onclick="toggleNotesEdit('{{ card.slug }}')">Edit</button>
+                    <button class="img-action-btn" id="notes-save-btn-{{ card.slug }}" onclick="saveNotes('{{ card.slug }}')" style="display:none;">Save</button>
+                    <button class="img-action-btn" id="notes-cancel-btn-{{ card.slug }}" onclick="cancelNotesEdit('{{ card.slug }}')" style="display:none;">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        {% if card.agent_notes_html %}
+        <div class="expandable agent-notes-expandable" id="agent-notes-{{ card.slug }}">
+            <div class="expandable-header" onclick="toggleExpand(this)">
+                <span class="agent-notes-header-label">Agent Notes</span>
+                <span class="arrow">&#9654;</span>
+            </div>
+            <div class="expandable-body">
+                <div class="agent-notes-content">{{ card.agent_notes_html }}</div>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="card-tags" data-slug="{{ card.slug }}">
+            {% for tag in card.tags %}
+            <span class="tag">{{ tag }}<span class="tag-remove" onclick="event.stopPropagation(); removeTag('{{ card.slug }}', '{{ tag }}')">&times;</span></span>
+            {% endfor %}
+            <button class="tag-add-btn" onclick="event.stopPropagation(); showTagInput(this, '{{ card.slug }}')">+</button>
+        </div>
+        </div><!-- .card-body -->
+    </div>
+    {% endfor %}
+</main>
+
+<div class="keyboard-hint" id="keyboardHint">
+    <strong>j</strong>/<strong>k</strong> navigate &nbsp; <strong>c</strong> collapse card &nbsp; <strong>C</strong> collapse all &nbsp; <strong>e</strong> code &nbsp; <strong>m</strong> methodology &nbsp; <strong>s</strong> stats &nbsp; <strong>n</strong> notes &nbsp; <strong>Esc</strong> close sections &nbsp; <strong>/</strong> search
+</div>
+
+<script>
+/* ── State ─────────────────────────────────────────────── */
+let currentCardIndex = -1;
+let activeStatusFilter = 'all';
+let activeGroupFilter = 'all';
+let activeTags = new Set();
+
+const cards = document.querySelectorAll('.card');
+const cardArray = Array.from(cards);
+
+/* ── Raw code storage for copy ─────────────────────────── */
+const rawCode = {};
+{% for card in cards %}
+rawCode['{{ card.slug }}'] = {{ card.code | tojson }};
+{% endfor %}
+
+/* ── Shared code panel ─────────────────────────────────── */
+const libCode = {};
+{% for lf in lib_files %}
+libCode['{{ lf.name }}'] = {{ lf.code_highlighted | tojson }};
+{% endfor %}
+
+function openLibFile(name) {
+    document.getElementById('libCodeTitle').textContent = name;
+    document.getElementById('libCodeContent').innerHTML = libCode[name] || '';
+    document.getElementById('libCodePanel').classList.add('open');
+}
+function closeLibPanel() {
+    document.getElementById('libCodePanel').classList.remove('open');
+}
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && document.getElementById('libCodePanel').classList.contains('open')) {
+        closeLibPanel();
+        e.stopPropagation();
+    }
+});
+
+/* ── Filtering ─────────────────────────────────────────── */
+function getVisibleCards() {
+    return cardArray.filter(c => c.style.display !== 'none');
+}
+
+function applyFilters() {
+    const search = document.getElementById('searchBox').value.toLowerCase();
+    let visible = 0;
+
+    cardArray.forEach(card => {
+        const status = card.dataset.status;
+        const group = card.dataset.group;
+        const tags = card.dataset.tags.split(',').filter(Boolean);
+        const text = card.textContent.toLowerCase();
+
+        const isStale = !!card.querySelector('.badge-stale');
+
+        let show = true;
+        if (activeStatusFilter === 'stale') {
+            if (!isStale) show = false;
+        } else if (activeStatusFilter !== 'all' && status !== activeStatusFilter) {
+            show = false;
+        }
+        if (activeGroupFilter !== 'all' && group !== activeGroupFilter) show = false;
+        if (activeTags.size > 0 && !tags.some(t => activeTags.has(t))) show = false;
+        if (search && !text.includes(search)) show = false;
+
+        card.style.display = show ? '' : 'none';
+        if (show) visible++;
+    });
+
+    document.getElementById('cardCount').textContent = `${visible} analyses`;
+}
+
+/* Status filter buttons */
+document.getElementById('statusFilters').addEventListener('click', e => {
+    if (!e.target.classList.contains('filter-btn')) return;
+    document.querySelectorAll('#statusFilters .filter-btn').forEach(b => b.classList.remove('active'));
+    e.target.classList.add('active');
+    activeStatusFilter = e.target.dataset.filter;
+    applyFilters();
+});
+
+/* Group nav */
+document.getElementById('groupNav').addEventListener('click', e => {
+    const li = e.target.closest('li');
+    if (!li) return;
+    document.querySelectorAll('#groupNav li').forEach(l => l.classList.remove('active'));
+    li.classList.add('active');
+    activeGroupFilter = li.dataset.group;
+    document.getElementById('currentView').textContent =
+        activeGroupFilter === 'all' ? 'All Analyses' : activeGroupFilter;
+    applyFilters();
+});
+
+/* Tag filters */
+const tagFilters = document.getElementById('tagFilters');
+if (tagFilters) {
+    tagFilters.addEventListener('click', e => {
+        if (!e.target.classList.contains('filter-btn')) return;
+        e.target.classList.toggle('active');
+        const tag = e.target.dataset.tag;
+        if (activeTags.has(tag)) activeTags.delete(tag);
+        else activeTags.add(tag);
+        applyFilters();
+    });
+}
+
+/* Search */
+document.getElementById('searchBox').addEventListener('input', applyFilters);
+
+/* ── Expandable sections ───────────────────────────────── */
+function toggleExpand(header) {
+    header.parentElement.classList.toggle('open');
+}
+
+/* ── Copy code ─────────────────────────────────────────── */
+function copyCode(btn, slug) {
+    navigator.clipboard.writeText(rawCode[slug]).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 1500);
+    });
+}
+
+/* ── Figure actions ────────────────────────────────────── */
+function copyFigure(btn) {
+    const img = btn.closest('.card-output').querySelector('img');
+    if (!img) return;
+    btn.textContent = 'Copying...';
+    // Fetch the image data and copy to clipboard as PNG
+    fetch(img.src)
+        .then(r => r.blob())
+        .then(blob => {
+            // Ensure it's PNG for clipboard compatibility
+            const item = new ClipboardItem({ 'image/png': blob });
+            return navigator.clipboard.write([item]);
+        })
+        .then(() => {
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = 'Copy Figure', 1500);
+        })
+        .catch(() => {
+            btn.textContent = 'Failed';
+            setTimeout(() => btn.textContent = 'Copy Figure', 1500);
+        });
+}
+
+function openFigure(btn) {
+    const img = btn.closest('.card-output').querySelector('img');
+    if (!img) return;
+    const slug = btn.closest('.card-output').dataset.slug;
+    const card = document.getElementById('card-' + slug);
+    const title = card ? card.querySelector('.card-title').textContent : slug;
+    const w = window.open('', '_blank');
+    const d = w.document;
+    d.open();
+    d.write('<!DOCTYPE html><html><head><title>' + title + '<' + '/title>');
+    d.write('<' + 'style>body{margin:0;background:#f5f6fa;display:flex;align-items:center;justify-content:center;min-height:100vh}');
+    d.write('img{max-width:95vw;max-height:95vh;object-fit:contain}<' + '/style>');
+    d.write('<' + '/head><body><img src="' + img.src + '" alt="' + title + '"><' + '/body><' + '/html>');
+    d.close();
+}
+
+/* ── Notes editing ─────────────────────────────────────── */
+const notesEditing = {};
+
+function toggleNotesEdit(slug) {
+    const display = document.getElementById('notes-display-' + slug);
+    const editor = document.getElementById('notes-editor-' + slug);
+    const textarea = document.getElementById('notes-textarea-' + slug);
+    const saveBtn = document.getElementById('notes-save-btn-' + slug);
+    const cancelBtn = document.getElementById('notes-cancel-btn-' + slug);
+
+    if (notesEditing[slug]) return; // already editing
+    notesEditing[slug] = true;
+    display.style.display = 'none';
+    editor.style.display = 'block';
+    saveBtn.style.display = '';
+    cancelBtn.style.display = '';
+    textarea.focus();
+}
+
+function cancelNotesEdit(slug) {
+    const display = document.getElementById('notes-display-' + slug);
+    const editor = document.getElementById('notes-editor-' + slug);
+    const saveBtn = document.getElementById('notes-save-btn-' + slug);
+    const cancelBtn = document.getElementById('notes-cancel-btn-' + slug);
+    display.style.display = '';
+    editor.style.display = 'none';
+    saveBtn.style.display = 'none';
+    cancelBtn.style.display = 'none';
+    notesEditing[slug] = false;
+}
+
+function saveNotes(slug) {
+    const textarea = document.getElementById('notes-textarea-' + slug);
+    const content = textarea.value;
+    const saveBtn = document.getElementById('notes-save-btn-' + slug);
+
+    // Try saving to server (live mode). Falls back to writing to file path hint.
+    saveBtn.textContent = 'Saving...';
+    fetch('/api/notes/' + slug, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({code: content}),
+    })
+    .then(r => {
+        if (r.ok) {
+            saveBtn.textContent = 'Saved!';
+            // Update the display with simple rendered markdown
+            const display = document.getElementById('notes-display-' + slug);
+            if (content.trim()) {
+                // Simple markdown: convert newlines to <br>, wrap in <p>
+                const html = content.split('\\n\\n').map(p => '<p>' + p.replace(/\\n/g, '<br>') + '<' + '/p>').join('');
+                display.innerHTML = '<div class="notes-content">' + html + '<' + '/div>';
+                // Update the dot indicator
+                const section = document.getElementById('notes-' + slug);
+                const label = section.querySelector('.notes-header-label');
+                if (!label.querySelector('.notes-dot')) {
+                    const dot = document.createElement('span');
+                    dot.className = 'notes-dot';
+                    label.appendChild(dot);
+                }
+            } else {
+                display.innerHTML = '<div class="notes-empty">No notes yet. Click Edit to add notes.<' + '/div>';
+            }
+            cancelNotesEdit(slug);
+        } else {
+            saveBtn.textContent = 'Error!';
+        }
+        setTimeout(() => { saveBtn.textContent = 'Save'; }, 1500);
+    })
+    .catch(() => {
+        // Not in live mode — tell user to edit file directly
+        saveBtn.textContent = 'Save failed (use labdash serve for live editing)';
+        setTimeout(() => { saveBtn.textContent = 'Save'; }, 3000);
+    });
+}
+
+/* ── Collapsible cards ─────────────────────────────────── */
+function toggleCard(header) {
+    header.closest('.card').classList.toggle('collapsed');
+}
+
+function collapseAll() {
+    getVisibleCards().forEach(c => c.classList.add('collapsed'));
+}
+
+function expandAll() {
+    getVisibleCards().forEach(c => c.classList.remove('collapsed'));
+}
+
+/* ── Group editing ─────────────────────────────────────── */
+let activeDropdown = null;
+
+function openGroupDropdown(label) {
+    // Close any existing dropdown
+    closeGroupDropdown();
+
+    const slug = label.dataset.slug;
+    const currentGroup = label.textContent.trim();
+
+    // Collect all existing groups
+    const allGroups = new Set();
+    cardArray.forEach(c => allGroups.add(c.dataset.group));
+
+    const dropdown = document.createElement('div');
+    dropdown.className = 'group-dropdown open';
+    dropdown.onclick = e => e.stopPropagation();
+
+    // Input for new group
+    const input = document.createElement('input');
+    input.className = 'group-dropdown-input';
+    input.placeholder = 'New group...';
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && input.value.trim()) {
+            setGroup(slug, input.value.trim(), label);
+            closeGroupDropdown();
+        }
+        if (e.key === 'Escape') closeGroupDropdown();
+    });
+    dropdown.appendChild(input);
+
+    // Existing groups
+    Array.from(allGroups).sort().forEach(g => {
+        const item = document.createElement('div');
+        item.className = 'group-dropdown-item' + (g === currentGroup ? ' active' : '');
+        item.textContent = g;
+        item.onclick = () => { setGroup(slug, g, label); closeGroupDropdown(); };
+        dropdown.appendChild(item);
+    });
+
+    label.style.position = 'relative';
+    label.appendChild(dropdown);
+    activeDropdown = dropdown;
+    input.focus();
+
+    // Close on outside click
+    setTimeout(() => document.addEventListener('click', closeGroupDropdown, { once: true }), 0);
+}
+
+function closeGroupDropdown() {
+    if (activeDropdown) {
+        activeDropdown.remove();
+        activeDropdown = null;
+    }
+}
+
+function setGroup(slug, newGroup, label) {
+    // Update DOM
+    const card = document.getElementById('card-' + slug);
+    card.dataset.group = newGroup;
+    label.childNodes[0].textContent = newGroup;
+
+    // Save to server
+    fetch('/api/meta/' + slug, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group: newGroup }),
+    }).catch(() => {});
+}
+
+/* ── Tag editing ───────────────────────────────────────── */
+function removeTag(slug, tag) {
+    const card = document.getElementById('card-' + slug);
+    const tags = card.dataset.tags.split(',').filter(t => t && t !== tag);
+    card.dataset.tags = tags.join(',');
+
+    // Remove from DOM
+    const tagsDiv = card.querySelector('.card-tags');
+    tagsDiv.querySelectorAll('.tag').forEach(el => {
+        if (el.textContent.replace('\u00d7', '').trim() === tag) el.remove();
+    });
+
+    // Save to server
+    fetch('/api/meta/' + slug, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: tags }),
+    }).catch(() => {});
+}
+
+function showTagInput(btn, slug) {
+    const input = document.createElement('input');
+    input.className = 'tag-add-input';
+    input.placeholder = 'tag';
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && input.value.trim()) {
+            addTag(slug, input.value.trim().toLowerCase());
+            input.remove();
+            btn.style.display = '';
+        }
+        if (e.key === 'Escape') {
+            input.remove();
+            btn.style.display = '';
+        }
+    });
+    input.addEventListener('blur', () => {
+        if (input.value.trim()) addTag(slug, input.value.trim().toLowerCase());
+        input.remove();
+        btn.style.display = '';
+    });
+    btn.style.display = 'none';
+    btn.parentNode.insertBefore(input, btn);
+    input.focus();
+}
+
+function addTag(slug, tag) {
+    const card = document.getElementById('card-' + slug);
+    const tags = card.dataset.tags.split(',').filter(Boolean);
+    if (tags.includes(tag)) return;
+    tags.push(tag);
+    card.dataset.tags = tags.join(',');
+
+    // Add to DOM
+    const tagsDiv = card.querySelector('.card-tags');
+    const addBtn = tagsDiv.querySelector('.tag-add-btn');
+    const span = document.createElement('span');
+    span.className = 'tag';
+    span.innerHTML = tag + '<span class="tag-remove" onclick="event.stopPropagation(); removeTag(\'' + slug + '\', \'' + tag + '\')">&times;<' + '/span>';
+    tagsDiv.insertBefore(span, addBtn);
+
+    // Save to server
+    fetch('/api/meta/' + slug, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: tags }),
+    }).catch(() => {});
+}
+
+/* ── Status cycling ────────────────────────────────────── */
+const STATUS_ORDER = ['draft', 'active', 'publication'];
+
+function cycleStatus(badge) {
+    const slug = badge.dataset.slug;
+    const current = badge.textContent.trim();
+    const idx = STATUS_ORDER.indexOf(current);
+    const next = STATUS_ORDER[(idx + 1) % STATUS_ORDER.length];
+
+    // Update DOM
+    badge.textContent = next;
+    badge.className = 'badge badge-' + next + ' status-badge';
+    const card = document.getElementById('card-' + slug);
+    if (card) card.dataset.status = next;
+
+    // Save to server
+    fetch('/api/meta/' + slug, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: next }),
+    }).catch(() => {});
+}
+
+/* ── Keyboard navigation ──────────────────────────────── */
+function focusCard(index) {
+    const visible = getVisibleCards();
+    if (visible.length === 0) return;
+    index = Math.max(0, Math.min(index, visible.length - 1));
+    cardArray.forEach(c => c.classList.remove('focused'));
+    visible[index].classList.add('focused');
+    visible[index].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    currentCardIndex = index;
+}
+
+document.addEventListener('keydown', e => {
+    // Don't capture when typing in search, editor, or Monaco
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA'
+        || e.target.closest('.monaco-editor')) {
+        if (e.key === 'Escape') e.target.blur();
+        return;
+    }
+
+    const visible = getVisibleCards();
+    switch (e.key) {
+        case 'j': focusCard(currentCardIndex + 1); e.preventDefault(); break;
+        case 'k': focusCard(currentCardIndex - 1); e.preventDefault(); break;
+        case 'c': {
+            if (currentCardIndex >= 0 && currentCardIndex < visible.length) {
+                visible[currentCardIndex].classList.toggle('collapsed');
+                saveCollapseState();
+            }
+            e.preventDefault();
+            break;
+        }
+        case 'C': {
+            // Shift+C: toggle all — collapse if any expanded, expand if all collapsed
+            const anyExpanded = visible.some(c => !c.classList.contains('collapsed'));
+            if (anyExpanded) collapseAll(); else expandAll();
+            e.preventDefault();
+            break;
+        }
+        case 'e': {
+            if (currentCardIndex >= 0 && currentCardIndex < visible.length) {
+                const slug = visible[currentCardIndex].dataset.slug;
+                const section = document.getElementById('code-' + slug);
+                if (section) section.classList.toggle('open');
+            }
+            e.preventDefault();
+            break;
+        }
+        case 'm': {
+            if (currentCardIndex >= 0 && currentCardIndex < visible.length) {
+                const slug = visible[currentCardIndex].dataset.slug;
+                const section = document.getElementById('methodology-' + slug);
+                if (section) section.classList.toggle('open');
+            }
+            e.preventDefault();
+            break;
+        }
+        case 'n': {
+            if (currentCardIndex >= 0 && currentCardIndex < visible.length) {
+                const slug = visible[currentCardIndex].dataset.slug;
+                const section = document.getElementById('notes-' + slug);
+                if (section) section.classList.toggle('open');
+            }
+            e.preventDefault();
+            break;
+        }
+        case 's': {
+            if (currentCardIndex >= 0 && currentCardIndex < visible.length) {
+                const slug = visible[currentCardIndex].dataset.slug;
+                const section = document.getElementById('stats-' + slug);
+                if (section) section.classList.toggle('open');
+            }
+            e.preventDefault();
+            break;
+        }
+        case '/': {
+            document.getElementById('searchBox').focus();
+            e.preventDefault();
+            break;
+        }
+        case 'Escape': {
+            // Collapse all expandable sections on focused card
+            if (currentCardIndex >= 0 && currentCardIndex < visible.length) {
+                visible[currentCardIndex].querySelectorAll('.expandable.open').forEach(
+                    el => el.classList.remove('open')
+                );
+            }
+            e.preventDefault();
+            break;
+        }
+        case '?': {
+            const hint = document.getElementById('keyboardHint');
+            hint.classList.toggle('visible');
+            setTimeout(() => hint.classList.remove('visible'), 3000);
+            e.preventDefault();
+            break;
+        }
+    }
+});
+
+/* ── Persistent collapse state ─────────────────────────── */
+const COLLAPSE_KEY = 'labdash-collapsed';
+
+function saveCollapseState() {
+    const collapsed = [];
+    cardArray.forEach(c => {
+        if (c.classList.contains('collapsed')) collapsed.push(c.dataset.slug);
+    });
+    try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed)); } catch(e) {}
+}
+
+function restoreCollapseState() {
+    try {
+        const data = localStorage.getItem(COLLAPSE_KEY);
+        if (!data) return;
+        const collapsed = JSON.parse(data);
+        collapsed.forEach(slug => {
+            const card = document.getElementById('card-' + slug);
+            if (card) card.classList.add('collapsed');
+        });
+    } catch(e) {}
+}
+
+// Restore on load
+restoreCollapseState();
+
+// Save whenever collapse changes (override toggleCard and collapseAll/expandAll)
+const _origToggleCard = toggleCard;
+toggleCard = function(header) {
+    _origToggleCard(header);
+    saveCollapseState();
+};
+const _origCollapseAll = collapseAll;
+collapseAll = function() { _origCollapseAll(); saveCollapseState(); };
+const _origExpandAll = expandAll;
+expandAll = function() { _origExpandAll(); saveCollapseState(); };
+
+/* ── Drag-and-drop reordering ──────────────────────────── */
+const ORDER_KEY = 'labdash-card-order';
+let draggedCard = null;
+
+function initDragAndDrop() {
+    cardArray.forEach(card => {
+        card.setAttribute('draggable', 'true');
+
+        card.addEventListener('dragstart', e => {
+            draggedCard = card;
+            card.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', card.dataset.slug);
+        });
+
+        card.addEventListener('dragend', () => {
+            card.classList.remove('dragging');
+            cardArray.forEach(c => c.classList.remove('drag-over'));
+            draggedCard = null;
+        });
+
+        card.addEventListener('dragover', e => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (draggedCard && draggedCard !== card) {
+                card.classList.add('drag-over');
+            }
+        });
+
+        card.addEventListener('dragleave', () => {
+            card.classList.remove('drag-over');
+        });
+
+        card.addEventListener('drop', e => {
+            e.preventDefault();
+            card.classList.remove('drag-over');
+            if (!draggedCard || draggedCard === card) return;
+
+            // Move dragged card before drop target
+            const container = card.parentNode;
+            container.insertBefore(draggedCard, card);
+
+            saveCardOrder();
+        });
+    });
+
+    // Restore saved order on load
+    restoreCardOrder();
+}
+
+function saveCardOrder() {
+    const container = document.querySelector('.main');
+    const slugs = [];
+    container.querySelectorAll('.card').forEach(c => slugs.push(c.dataset.slug));
+    try { localStorage.setItem(ORDER_KEY, JSON.stringify(slugs)); } catch(e) {}
+    document.getElementById('resetOrderBtn').style.display = '';
+}
+
+function restoreCardOrder() {
+    try {
+        const data = localStorage.getItem(ORDER_KEY);
+        if (!data) return;
+        const slugs = JSON.parse(data);
+        const container = document.querySelector('.main');
+        const header = container.querySelector('.main-header');
+
+        // Reorder cards to match saved order
+        slugs.forEach(slug => {
+            const card = document.getElementById('card-' + slug);
+            if (card) container.appendChild(card);
+        });
+
+        document.getElementById('resetOrderBtn').style.display = '';
+    } catch(e) {}
+}
+
+function resetCardOrder() {
+    try { localStorage.removeItem(ORDER_KEY); } catch(e) {}
+    document.getElementById('resetOrderBtn').style.display = 'none';
+    location.reload();
+}
+
+initDragAndDrop();
+
+/* ── Live mode detection ───────────────────────────────── */
+/* When served via labdash serve, the server injects a script that enables
+   edit/run/save functionality. In static mode, these features are hidden. */
+</script>
+</body>
+</html>

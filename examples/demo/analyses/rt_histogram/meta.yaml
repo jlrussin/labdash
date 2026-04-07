@@ -1,0 +1,13 @@
+title: "RT Distribution"
+group: "Distributions"
+order: 1
+description: >
+  Histogram of reaction times across all trials, with median line overlay.
+methodology: >
+  All trials are included regardless of phase. The median RT is
+  shown as a dashed vertical line.
+tags: [rt, distribution]
+status: active
+output_format: png
+figure_id: ""
+caption: ""

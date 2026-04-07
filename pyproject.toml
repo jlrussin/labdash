@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "labdash"
+version = "0.1.0"
+description = "AI-agent-friendly analysis & visualization dashboard for scientific research"
+requires-python = ">=3.10"
+dependencies = [
+    "jinja2>=3.1",
+    "pygments>=2.17",
+    "pyyaml>=6.0",
+    "markdown>=3.5",
+]
+
+[project.optional-dependencies]
+serve = [
+    "fastapi>=0.109",
+    "uvicorn>=0.27",
+]
+
+[project.scripts]
+labdash = "labdash.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["labdash*"]
+
+[tool.setuptools.package-data]
+labdash = ["templates/**/*"]

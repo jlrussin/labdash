@@ -1,0 +1,132 @@
+"""Export publication-ready figures and self-contained code."""
+
+import json
+import shutil
+from pathlib import Path
+
+import yaml
+
+from .runner import discover_analyses, run_analysis
+
+
+def export_figures(analyses_dir: Path, output_dir: Path, dest: Path, *,
+                   fmt: str = "svg", dpi: int = 300, status: str = "publication"):
+    """Re-run publication analyses at high quality and copy to flat directory."""
+    analyses = discover_analyses(analyses_dir)
+    pub = [a for a in analyses if a["meta"].get("status") == status]
+
+    if not pub:
+        print(f"No analyses with status '{status}' found.")
+        return
+
+    dest.mkdir(parents=True, exist_ok=True)
+    manifest = {}
+
+    for a in pub:
+        slug = a["slug"]
+        meta = a["meta"]
+        figure_id = meta.get("figure_id", slug)
+
+        # Temporarily patch output format in the environment
+        # The analysis should respect output_format from meta, but we override
+        # by re-running to a temp output dir
+        temp_out = output_dir / f"_export_{slug}"
+        temp_out.mkdir(parents=True, exist_ok=True)
+
+        print(f"  Exporting {slug} as {fmt}...", end=" ", flush=True)
+        result = run_analysis(a, temp_out)
+
+        if not result["success"]:
+            print(f"FAIL")
+            if result["error"]:
+                for line in result["error"].strip().split("\n")[-3:]:
+                    print(f"    {line}")
+            continue
+
+        # Find the output file and copy with figure_id name
+        for ext in [f".{fmt}", ".png", ".svg", ".pdf"]:
+            src = temp_out / f"output{ext}"
+            if src.exists():
+                dest_name = f"{figure_id}{ext}"
+                shutil.copy2(src, dest / dest_name)
+                manifest[figure_id] = {"slug": slug, "file": dest_name, "caption": meta.get("caption", "")}
+                print(f"OK → {dest_name}")
+                break
+        else:
+            print("WARN: no output file found")
+
+        # Clean up temp
+        shutil.rmtree(temp_out, ignore_errors=True)
+
+    # Write manifest
+    manifest_path = dest / "figure_manifest.yaml"
+    with open(manifest_path, "w") as f:
+        yaml.dump(manifest, f, default_flow_style=False)
+    print(f"\nExported {len(manifest)} figures to {dest}")
+    print(f"Manifest: {manifest_path}")
+
+
+def export_code(analyses_dir: Path, dest: Path, *, status: str = "publication"):
+    """Gather analysis scripts + _lib into a self-contained directory."""
+    analyses = discover_analyses(analyses_dir)
+    pub = [a for a in analyses if a["meta"].get("status") == status]
+
+    if not pub:
+        print(f"No analyses with status '{status}' found.")
+        return
+
+    dest.mkdir(parents=True, exist_ok=True)
+
+    # Copy _lib
+    lib_src = analyses_dir / "_lib"
+    lib_dest = dest / "_lib"
+    if lib_src.exists():
+        if lib_dest.exists():
+            shutil.rmtree(lib_dest)
+        shutil.copytree(lib_src, lib_dest)
+        print(f"  Copied _lib/")
+
+    # Copy each analysis
+    for a in pub:
+        slug = a["slug"]
+        slug_dest = dest / slug
+        slug_dest.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(a["analysis_path"], slug_dest / "analysis.py")
+        meta_src = a["dir"] / "meta.yaml"
+        if meta_src.exists():
+            shutil.copy2(meta_src, slug_dest / "meta.yaml")
+        print(f"  Copied {slug}/")
+
+    # Generate a simple run_all.py
+    run_all_code = '''"""Run all analyses to reproduce figures."""
+import sys
+from pathlib import Path
+
+# Add this directory to path for _lib imports
+sys.path.insert(0, str(Path(__file__).parent))
+
+ANALYSES = [
+'''
+    for a in pub:
+        run_all_code += f'    "{a["slug"]}",\n'
+    run_all_code += ''']
+
+if __name__ == "__main__":
+    for slug in ANALYSES:
+        print(f"Running {slug}...", end=" ", flush=True)
+        try:
+            import importlib
+            mod = importlib.import_module(f"{slug}.analysis")
+            output_dir = Path(__file__).parent / slug
+            mod.run(output_dir)
+            print("OK")
+        except Exception as e:
+            print(f"FAIL: {e}")
+'''
+    (dest / "run_all.py").write_text(run_all_code)
+
+    # Generate requirements.txt from _lib imports (basic)
+    reqs = "# Core dependencies for reproducing analyses\nnumpy\npandas\nmatplotlib\nseaborn\nscipy\n"
+    (dest / "requirements.txt").write_text(reqs)
+
+    print(f"\nExported {len(pub)} analyses to {dest}")
