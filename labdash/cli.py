@@ -28,12 +28,19 @@ def _resolve_dirs(config: dict) -> tuple[Path, Path]:
     return analyses_dir, output_dir
 
 
+def _apply_collection_override(config: dict, collection: str | None):
+    """Override analyses_dir in config if --collection was given."""
+    if collection:
+        config["analyses_dir"] = collection
+
+
 def cmd_build(args):
     """Build command: run analyses and generate static HTML."""
     from .runner import run_all
     from .builder import build_dashboard
 
     config = _load_config()
+    _apply_collection_override(config, getattr(args, "collection", None))
     analyses_dir, output_dir = _resolve_dirs(config)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -59,6 +66,7 @@ def cmd_serve(args):
         sys.exit(1)
 
     config = _load_config()
+    _apply_collection_override(config, getattr(args, "collection", None))
     port = args.port or config.get("server_port", 8800)
 
     from .server import create_app
@@ -72,6 +80,7 @@ def cmd_export(args):
     from .export import export_figures, export_code
 
     config = _load_config()
+    _apply_collection_override(config, getattr(args, "collection", None))
     analyses_dir, output_dir = _resolve_dirs(config)
 
     if args.subcommand == "figures":
@@ -95,18 +104,23 @@ def main():
     parser = argparse.ArgumentParser(prog="labdash", description="AI-agent-friendly analysis dashboard")
     sub = parser.add_subparsers(dest="command")
 
+    collection_help = "Override analyses_dir from labdash.yaml (e.g., analysis/sim_task)"
+
     # build
     p_build = sub.add_parser("build", help="Run analyses and generate static HTML dashboard")
+    p_build.add_argument("-c", "--collection", help=collection_help)
     p_build.add_argument("slugs", nargs="*", help="Specific analysis slugs to run (default: all)")
     p_build.set_defaults(func=cmd_build)
 
     # serve
     p_serve = sub.add_parser("serve", help="Start live development server with in-browser editing")
+    p_serve.add_argument("-c", "--collection", help=collection_help)
     p_serve.add_argument("--port", type=int, help="Server port (default: from config or 8765)")
     p_serve.set_defaults(func=cmd_serve)
 
     # export
     p_export = sub.add_parser("export", help="Export publication-ready figures or code")
+    p_export.add_argument("-c", "--collection", help=collection_help)
     export_sub = p_export.add_subparsers(dest="subcommand")
 
     p_figs = export_sub.add_parser("figures", help="Export figures at publication quality")

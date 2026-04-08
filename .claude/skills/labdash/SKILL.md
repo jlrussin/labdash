@@ -187,12 +187,14 @@ If you change what a script computes or visualizes, update the `description` and
 
 ```bash
 # Build (run analyses + generate static HTML dashboard)
-labdash build                        # run all analyses
+labdash build                        # run all analyses in default collection
 labdash build slug1 slug2            # run specific analyses only
+labdash build -c path/to/collection  # build a specific collection
 
 # Serve (live development server with in-browser editing)
-labdash serve                        # starts on localhost:8765
+labdash serve                        # starts on localhost:8800
 labdash serve --port 9000            # custom port
+labdash serve -c path/to/collection  # serve a specific collection
 
 # Export (publication-ready output)
 labdash export figures               # SVG figures for publication
@@ -202,6 +204,24 @@ labdash export code                  # self-contained code directory
 
 # Initialize (scaffold new project)
 labdash init /path/to/project        # create directory structure
+```
+
+### Build vs. Serve
+
+**Build is persistent** — once a collection has been built, the output files exist in `_output/` and don't need rebuilding unless an `analysis.py` script changes. The serve command reads from existing outputs. **Do not rebuild a collection from scratch** just to view it. Only rebuild individual analyses that have changed:
+
+```bash
+labdash build -c my_collection changed_analysis  # rebuild just one
+labdash serve -c my_collection                   # view all (uses cached outputs)
+```
+
+### Running Multiple Collections Simultaneously
+
+Use `--port` to serve multiple collections at once:
+
+```bash
+labdash serve -c analyses/pilot1 --port 8800
+labdash serve -c analyses/simulation --port 8801
 ```
 
 ## 6. Creating a New Analysis
