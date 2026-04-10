@@ -17,7 +17,7 @@ try:
 except ImportError:
     raise ImportError("Install serve extras: pip install labdash[serve]")
 
-from .runner import discover_analyses, run_analysis
+from .runner import discover_analyses, run_analysis, load_registry, _is_new_format_registry
 from .builder import build_dashboard
 
 
@@ -29,13 +29,25 @@ class MetaUpdate(BaseModel):
     group: str | None = None
     tags: list[str] | None = None
     status: str | None = None
-    order: int | None = None
     description: str | None = None
     methodology: str | None = None
 
 
 class ConfigUpdate(BaseModel):
     title: str | None = None
+
+
+class GroupOrder(BaseModel):
+    name: str
+    analyses: list[str]
+
+
+class RegistryOrderUpdate(BaseModel):
+    groups: list[GroupOrder]
+
+
+class AgentNotesUpdate(BaseModel):
+    agent_notes: str
 
 
 
@@ -64,10 +76,45 @@ def _make_code_diff_summary(old_code: str, new_code: str) -> str:
     return "```diff\n" + "\n".join(diff[2:]) + "\n```"
 
 
-def _update_registry(analyses_dir: Path):
-    """Regenerate registry.yaml with current groups and tags."""
-    from .builder import _update_registry as _builder_update_registry
-    _builder_update_registry(analyses_dir)
+def _sync_registry(analyses_dir: Path):
+    """Sync registry.yaml with current analyses on disk."""
+    from .builder import _sync_registry as _builder_sync_registry
+    _builder_sync_registry(analyses_dir)
+
+
+def _move_slug_in_registry(analyses_dir: Path, slug: str, old_group: str | None, new_group: str):
+    """Move a slug between groups in registry.yaml. Creates new group if needed."""
+    registry = load_registry(analyses_dir)
+    if registry is None or not _is_new_format_registry(registry):
+        _sync_registry(analyses_dir)
+        return
+
+    groups = registry.get("groups", [])
+
+    # Remove from old group
+    for group in groups:
+        if slug in group.get("analyses", []):
+            group["analyses"].remove(slug)
+            break
+
+    # Remove empty groups
+    groups = [g for g in groups if g.get("analyses")]
+
+    # Add to new group (at end of that group's list)
+    target = None
+    for group in groups:
+        if group["name"] == new_group:
+            target = group
+            break
+    if target:
+        target["analyses"].append(slug)
+    else:
+        groups.append({"name": new_group, "analyses": [slug]})
+
+    registry["groups"] = groups
+    registry_path = analyses_dir / "registry.yaml"
+    with open(registry_path, "w") as f:
+        yaml.dump(registry, f, default_flow_style=False, sort_keys=False)
 
 
 def create_app(config: dict) -> FastAPI:
@@ -200,6 +247,7 @@ def create_app(config: dict) -> FastAPI:
 
         updated = []
         changes = []
+        old_group = meta.get("group")
         for key, value in update.model_dump(exclude_none=True).items():
             old_val = meta.get(key)
             if old_val != value:
@@ -212,9 +260,107 @@ def create_app(config: dict) -> FastAPI:
 
         if changes:
             _append_change_log(analyses_dir, slug, "metadata edit", "\n".join(changes))
-            _update_registry(analyses_dir)
+
+        # If group changed, update registry (move slug between groups)
+        new_group = update.group
+        if new_group is not None and new_group != old_group:
+            _move_slug_in_registry(analyses_dir, slug, old_group, new_group)
+        elif changes:
+            # Tags or other metadata changed — sync registry for tags
+            _sync_registry(analyses_dir)
 
         return {"status": "saved", "slug": slug, "updated": updated}
+
+    # ── Registry endpoints ────────────────────────────────
+
+    @app.get("/api/registry")
+    def get_registry():
+        """Return current registry data."""
+        registry = load_registry(analyses_dir)
+        if registry is None:
+            return {"groups": [], "tags": [], "agent_notes": ""}
+        return {
+            "groups": registry.get("groups", []),
+            "tags": registry.get("tags", []),
+            "agent_notes": registry.get("agent_notes", ""),
+        }
+
+    @app.put("/api/registry/order")
+    def update_registry_order(update: RegistryOrderUpdate):
+        """Save complete ordering state (group order + within-group order).
+
+        Also updates meta.yaml group field for any analysis whose group changed.
+        """
+        registry_path = analyses_dir / "registry.yaml"
+        old_registry = load_registry(analyses_dir) or {}
+
+        # Build old group mapping: slug -> group name
+        old_group_for = {}
+        if _is_new_format_registry(old_registry):
+            for group in old_registry.get("groups", []):
+                for s in group.get("analyses", []):
+                    old_group_for[s] = group["name"]
+
+        # Build new group mapping and detect group changes
+        group_changes = []
+        for group in update.groups:
+            for s in group.analyses:
+                old_g = old_group_for.get(s)
+                if old_g is not None and old_g != group.name:
+                    group_changes.append((s, old_g, group.name))
+
+        # Update meta.yaml group field for any changed analyses
+        if group_changes:
+            analyses = discover_analyses(analyses_dir)
+            by_slug = {a["slug"]: a for a in analyses}
+            for s, old_g, new_g in group_changes:
+                if s in by_slug:
+                    meta_path = by_slug[s]["dir"] / "meta.yaml"
+                    with open(meta_path) as f:
+                        meta = yaml.safe_load(f)
+                    meta["group"] = new_g
+                    with open(meta_path, "w") as f:
+                        yaml.dump(meta, f, default_flow_style=False, sort_keys=False)
+                    _append_change_log(analyses_dir, s, "group change (drag)",
+                                       f"- `group`: `{old_g}` → `{new_g}`")
+
+        # Write registry with new ordering
+        new_registry = {
+            "groups": [{"name": g.name, "analyses": g.analyses} for g in update.groups],
+            "tags": old_registry.get("tags", []),
+        }
+        agent_notes = old_registry.get("agent_notes", "")
+        if agent_notes:
+            new_registry["agent_notes"] = agent_notes
+
+        # Re-collect tags from meta.yaml files
+        analyses = discover_analyses(analyses_dir)
+        all_tags = set()
+        for a in analyses:
+            for t in a["meta"].get("tags", []):
+                all_tags.add(t)
+        new_registry["tags"] = sorted(all_tags)
+
+        with open(registry_path, "w") as f:
+            yaml.dump(new_registry, f, default_flow_style=False, sort_keys=False)
+
+        return {"status": "saved", "group_changes": len(group_changes)}
+
+    @app.patch("/api/registry/agent-notes")
+    def update_agent_notes(update: AgentNotesUpdate):
+        """Update agent_notes field in registry.yaml."""
+        registry_path = analyses_dir / "registry.yaml"
+        registry = load_registry(analyses_dir) or {}
+
+        if not _is_new_format_registry(registry):
+            raise HTTPException(400, "Registry must be in new format first (run labdash build)")
+
+        registry["agent_notes"] = update.agent_notes
+
+        with open(registry_path, "w") as f:
+            yaml.dump(registry, f, default_flow_style=False, sort_keys=False)
+
+        return {"status": "saved"}
 
     @app.patch("/api/config")
     def update_config(update: ConfigUpdate):
@@ -268,12 +414,18 @@ def _get_live_mode_script() -> str:
 <!-- Monaco Editor loader from CDN -->
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
 <script>
-/* ── Live Mode: Show live-only buttons ──────────────── */
+/* ── Live Mode: Show live-only buttons, enable live ordering ── */
 (function() {
+    isLiveMode = true;
     const reloadBtn = document.getElementById('reloadDataBtn');
     if (reloadBtn) reloadBtn.style.display = '';
     const runAllBtn = document.getElementById('runAllBtn');
     if (runAllBtn) runAllBtn.style.display = '';
+    // Hide reset order button in live mode (order is persisted to registry)
+    const resetBtn = document.getElementById('resetOrderBtn');
+    if (resetBtn) resetBtn.style.display = 'none';
+    // Clear stale localStorage order (live mode uses registry order baked into HTML)
+    try { localStorage.removeItem('labdash-card-order'); } catch(e) {}
 })();
 
 window.reloadData = async function() {
@@ -300,6 +452,94 @@ window.reloadData = async function() {
     btn.disabled = false;
     setTimeout(() => { btn.textContent = 'Reload Data'; }, 2000);
 };
+
+/* ── Live Mode: Sidebar group dragging ────────────────── */
+(function() {
+    let draggedGroupLi = null;
+    const groupNav = document.getElementById('groupNav');
+    const groupItems = groupNav.querySelectorAll('li[data-group]');
+
+    groupItems.forEach(li => {
+        if (li.dataset.group === 'all') return; // "All groups" not draggable
+
+        li.setAttribute('draggable', 'true');
+        li.style.cursor = 'grab';
+
+        li.addEventListener('dragstart', e => {
+            draggedGroupLi = li;
+            li.style.opacity = '0.4';
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', li.dataset.group);
+        });
+
+        li.addEventListener('dragend', () => {
+            li.style.opacity = '';
+            groupItems.forEach(l => l.classList.remove('drag-over'));
+            draggedGroupLi = null;
+        });
+
+        li.addEventListener('dragover', e => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (draggedGroupLi && draggedGroupLi !== li && li.dataset.group !== 'all') {
+                li.classList.add('drag-over');
+            }
+        });
+
+        li.addEventListener('dragleave', () => {
+            li.classList.remove('drag-over');
+        });
+
+        li.addEventListener('drop', e => {
+            e.preventDefault();
+            li.classList.remove('drag-over');
+            if (!draggedGroupLi || draggedGroupLi === li) return;
+
+            // Reorder sidebar: insert dragged before drop target
+            groupNav.insertBefore(draggedGroupLi, li);
+
+            // Reorder main content: move subtitle+card blocks to match sidebar order
+            reorderMainByGroups();
+            saveCardOrder();
+        });
+    });
+
+    function reorderMainByGroups() {
+        const container = document.querySelector('.main');
+        // Read new group order from sidebar
+        const newOrder = [];
+        groupNav.querySelectorAll('li[data-group]').forEach(li => {
+            if (li.dataset.group !== 'all') newOrder.push(li.dataset.group);
+        });
+
+        // Collect subtitle+card blocks per group
+        const blocksByGroup = {};
+        let currentGroup = null;
+        let currentBlock = [];
+        for (const el of Array.from(container.children)) {
+            if (el.classList.contains('group-subtitle')) {
+                if (currentGroup && currentBlock.length) {
+                    blocksByGroup[currentGroup] = currentBlock;
+                }
+                currentGroup = el.dataset.group;
+                currentBlock = [el];
+            } else if (el.classList.contains('card')) {
+                currentBlock.push(el);
+            }
+        }
+        if (currentGroup && currentBlock.length) {
+            blocksByGroup[currentGroup] = currentBlock;
+        }
+
+        // Re-append in new order (after the header elements)
+        newOrder.forEach(groupName => {
+            const block = blocksByGroup[groupName];
+            if (block) block.forEach(el => container.appendChild(el));
+        });
+
+        updateGroupSubtitles();
+    }
+})();
 
 /* ── Live Mode: Unified Monaco Editor ──────────────────── */
 (function() {

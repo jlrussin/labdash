@@ -14,7 +14,7 @@ def discover_analyses(analyses_dir: Path) -> list[dict]:
     """Find all analysis directories containing analysis.py + meta.yaml.
 
     Returns list of dicts with keys: slug, dir, meta, analysis_path.
-    Sorted by (group, order, slug).
+    Sorted by (group, order, slug) as a fallback ordering.
     """
     analyses = []
     for d in sorted(analyses_dir.iterdir()):
@@ -36,6 +36,69 @@ def discover_analyses(analyses_dir: Path) -> list[dict]:
         })
     analyses.sort(key=lambda a: (a["meta"].get("group", ""), a["meta"].get("order", 999), a["slug"]))
     return analyses
+
+
+def load_registry(analyses_dir: Path) -> dict | None:
+    """Load and parse registry.yaml. Returns None if missing or invalid.
+
+    New format has groups as a list of dicts:
+      groups: [{name: "...", analyses: [...]}, ...]
+    Old format has groups as a dict:
+      groups: {"GroupName": ["slug1", ...]}
+    """
+    registry_path = analyses_dir / "registry.yaml"
+    if not registry_path.exists():
+        return None
+    try:
+        with open(registry_path) as f:
+            data = yaml.safe_load(f)
+        if not isinstance(data, dict):
+            return None
+        return data
+    except Exception as e:
+        print(f"Warning: failed to parse registry.yaml: {e}")
+        return None
+
+
+def _is_new_format_registry(registry: dict) -> bool:
+    """Check if registry uses the new list-of-dicts format for groups."""
+    groups = registry.get("groups")
+    if not isinstance(groups, list):
+        return False
+    if len(groups) == 0:
+        return True
+    return isinstance(groups[0], dict)
+
+
+def ordered_analyses(analyses_dir: Path) -> list[dict]:
+    """Return analyses in registry order (group order -> within-group order).
+
+    Falls back to meta.yaml-based ordering if no new-format registry exists.
+    Analyses on disk but not in registry are appended at the end.
+    """
+    all_analyses = discover_analyses(analyses_dir)
+    registry = load_registry(analyses_dir)
+
+    if registry is None or not _is_new_format_registry(registry):
+        # No new-format registry — use meta.yaml ordering (already sorted by discover_analyses)
+        return all_analyses
+
+    by_slug = {a["slug"]: a for a in all_analyses}
+    ordered = []
+    seen = set()
+
+    for group in registry.get("groups", []):
+        for slug in group.get("analyses", []):
+            if slug in by_slug and slug not in seen:
+                ordered.append(by_slug[slug])
+                seen.add(slug)
+
+    # Append analyses not in registry (new ones, sorted by group/order/slug)
+    for a in all_analyses:
+        if a["slug"] not in seen:
+            ordered.append(a)
+
+    return ordered
 
 
 def _resolve_run_order(analyses: list[dict]) -> list[dict]:

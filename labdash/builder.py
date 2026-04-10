@@ -12,7 +12,7 @@ from pygments import highlight
 from pygments.lexers import PythonLexer
 from pygments.formatters import HtmlFormatter
 
-from .runner import discover_analyses
+from .runner import discover_analyses, ordered_analyses, load_registry, _is_new_format_registry
 
 
 def _read_file(path: Path) -> str | None:
@@ -96,7 +96,7 @@ def build_card_data(analysis: dict, output_dir: Path) -> dict:
         "slug": slug,
         "title": meta.get("title", slug),
         "group": meta.get("group", "Ungrouped"),
-        "order": meta.get("order", 999),
+        "order": meta.get("order", 999),  # legacy; ordering now comes from registry
         "description": meta.get("description", ""),
         "methodology": meta.get("methodology", ""),
         "tags": meta.get("tags", []),
@@ -154,18 +154,24 @@ def _load_project_config(analyses_dir: Path) -> dict:
 
 def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
     """Generate the static HTML dashboard. Returns path to index.html."""
-    analyses = discover_analyses(analyses_dir)
+    # Sync registry first (handles migration, adds new analyses, removes deleted)
+    _sync_registry(analyses_dir)
+
+    analyses = ordered_analyses(analyses_dir)
 
     # Build card data for each analysis
     cards = [build_card_data(a, output_dir) for a in analyses]
 
-    # Organize by group
-    groups = {}
+    # Organize by group as an ordered list of {name, cards} dicts
+    groups_ordered = []
+    groups_dict = {}
     for card in cards:
         g = card["group"]
-        if g not in groups:
-            groups[g] = []
-        groups[g].append(card)
+        if g not in groups_dict:
+            group_entry = {"name": g, "cards": []}
+            groups_ordered.append(group_entry)
+            groups_dict[g] = group_entry
+        groups_dict[g]["cards"].append(card)
 
     # All unique tags
     all_tags = sorted({t for card in cards for t in card["tags"]})
@@ -193,7 +199,7 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
 
     html = template.render(
         cards=cards,
-        groups=groups,
+        groups=groups_ordered,
         all_tags=all_tags,
         all_statuses=all_statuses,
         pygments_css=pygments_css,
@@ -206,33 +212,122 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
     index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(html)
 
-    # Update registry.yaml with current groups and tags
-    _update_registry(analyses_dir, analyses)
-
     return index_path
 
 
-def _update_registry(analyses_dir: Path, analyses: list[dict] | None = None):
-    """Regenerate registry.yaml with current groups and tags."""
+def _sync_registry(analyses_dir: Path, analyses: list[dict] | None = None):
+    """Sync registry.yaml with analyses on disk. Never reorders existing entries.
+
+    - If registry is missing or old format: auto-migrate from meta.yaml order
+    - Adds new analyses (on disk but not in registry) to end of their group
+    - Removes deleted analyses (in registry but not on disk)
+    - Removes empty groups
+    - Re-collects tags from all meta.yaml files
+    - Preserves agent_notes
+    """
     if analyses is None:
         analyses = discover_analyses(analyses_dir)
 
-    groups = {}
-    tags = set()
+    disk_slugs = {a["slug"] for a in analyses}
+    by_slug = {a["slug"]: a for a in analyses}
+
+    # Collect tags from all meta.yaml files
+    all_tags = set()
     for a in analyses:
-        meta = a["meta"]
-        g = meta.get("group", "Ungrouped")
-        if g not in groups:
-            groups[g] = []
-        groups[g].append(a["slug"])
-        for t in meta.get("tags", []):
-            tags.add(t)
+        for t in a["meta"].get("tags", []):
+            all_tags.add(t)
 
-    registry = {
-        "groups": {g: sorted(slugs) for g, slugs in sorted(groups.items())},
-        "tags": sorted(tags),
-    }
+    registry = load_registry(analyses_dir)
 
+    if registry is not None and _is_new_format_registry(registry):
+        # New format exists — sync it
+        agent_notes = registry.get("agent_notes", "")
+
+        # Build set of slugs currently in registry
+        registry_slugs = set()
+        for group in registry.get("groups", []):
+            for slug in group.get("analyses", []):
+                registry_slugs.add(slug)
+
+        # Remove deleted slugs from groups
+        new_groups = []
+        for group in registry.get("groups", []):
+            filtered = [s for s in group.get("analyses", []) if s in disk_slugs]
+            if filtered:
+                new_groups.append({"name": group["name"], "analyses": filtered})
+
+        # Warn about group mismatches (registry wins for existing analyses)
+        registry_group_for = {}
+        for group in new_groups:
+            for slug in group["analyses"]:
+                registry_group_for[slug] = group["name"]
+        for slug, reg_group in registry_group_for.items():
+            if slug in by_slug:
+                meta_group = by_slug[slug]["meta"].get("group", "Ungrouped")
+                if meta_group != reg_group:
+                    print(f"  Note: {slug} meta.yaml group \"{meta_group}\" "
+                          f"differs from registry group \"{reg_group}\" (registry wins)")
+
+        # Add new slugs (on disk but not in registry)
+        new_slugs = disk_slugs - registry_slugs
+        if new_slugs:
+            # Sort new slugs by (group, slug) for deterministic insertion
+            new_sorted = sorted(new_slugs, key=lambda s: (by_slug[s]["meta"].get("group", "Ungrouped"), s))
+            groups_by_name = {g["name"]: g for g in new_groups}
+            for slug in new_sorted:
+                group_name = by_slug[slug]["meta"].get("group", "Ungrouped")
+                if group_name in groups_by_name:
+                    groups_by_name[group_name]["analyses"].append(slug)
+                else:
+                    new_group = {"name": group_name, "analyses": [slug]}
+                    new_groups.append(new_group)
+                    groups_by_name[group_name] = new_group
+                print(f"  Added {slug} to group \"{group_name}\"")
+
+        updated = {
+            "agent_notes": agent_notes,
+            "groups": new_groups,
+            "tags": sorted(all_tags),
+        }
+        if not agent_notes:
+            del updated["agent_notes"]
+
+    else:
+        # No registry or old format — migrate from meta.yaml order
+        # discover_analyses already sorted by (group, order, slug)
+        print("  Migrating to new registry format...")
+        groups_ordered = []
+        groups_dict = {}
+        for a in analyses:
+            group_name = a["meta"].get("group", "Ungrouped")
+            if group_name not in groups_dict:
+                group_entry = {"name": group_name, "analyses": []}
+                groups_ordered.append(group_entry)
+                groups_dict[group_name] = group_entry
+            groups_dict[group_name]["analyses"].append(a["slug"])
+
+        # Preserve agent_notes from old registry if present
+        agent_notes = ""
+        if registry is not None:
+            agent_notes = registry.get("agent_notes", "")
+
+        updated = {
+            "groups": groups_ordered,
+            "tags": sorted(all_tags),
+        }
+        if agent_notes:
+            updated["agent_notes"] = agent_notes
+
+        # Remove 'order' field from all meta.yaml files
+        for a in analyses:
+            meta_path = a["dir"] / "meta.yaml"
+            if "order" in a["meta"]:
+                del a["meta"]["order"]
+                with open(meta_path, "w") as f:
+                    yaml.dump(a["meta"], f, default_flow_style=False, sort_keys=False)
+        print(f"  Migrated {len(analyses)} analyses into {len(groups_ordered)} groups")
+
+    # Write registry
     registry_path = analyses_dir / "registry.yaml"
     with open(registry_path, "w") as f:
-        yaml.dump(registry, f, default_flow_style=False, sort_keys=False)
+        yaml.dump(updated, f, default_flow_style=False, sort_keys=False)

@@ -1,15 +1,17 @@
-title: "Accuracy by Difficulty"
-group: "Performance"
-order: 1
-description: >
-  Bar chart comparing accuracy rates across easy, medium, and hard
-  difficulty levels.
-methodology: >
-  Accuracy is computed as the proportion of correct trials within
-  each difficulty level. Error bars show 95% binomial confidence
-  intervals.
-tags: [accuracy, difficulty]
+title: Accuracy by Difficulty
+group: Performance
+description: 'Bar chart comparing accuracy rates across easy, medium, and hard difficulty
+  levels.
+
+  '
+methodology: 'Accuracy is computed as the proportion of correct trials within each
+  difficulty level. Error bars show 95% binomial confidence intervals.
+
+  '
+tags:
+- accuracy
+- difficulty
 status: active
 output_format: png
-figure_id: ""
-caption: ""
+figure_id: ''
+caption: ''

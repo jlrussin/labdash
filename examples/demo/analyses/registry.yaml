@@ -1,9 +1,12 @@
 groups:
-  Distributions:
+- name: Distributions
+  analyses:
   - rt_histogram
-  Learning:
+- name: Learning
+  analyses:
   - learning_curve
-  Performance:
+- name: Performance
+  analyses:
   - accuracy_by_difficulty
 tags:
 - accuracy

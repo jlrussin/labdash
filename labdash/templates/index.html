@@ -78,10 +78,38 @@ body {
 }
 .group-nav li:hover { background: #f0f0f0; }
 .group-nav li.active { background: #ebf5fb; color: #2980b9; font-weight: 500; }
+.group-nav li.drag-over { border-top: 2px solid #3498db; }
 .group-count {
     float: right;
     font-size: 0.75rem;
     color: #aaa;
+}
+
+/* ── Group subtitles ──────────────────────────────────── */
+.group-subtitle {
+    padding: 0.4rem 0;
+    margin-top: 1.2rem;
+    margin-bottom: 0.3rem;
+    border-bottom: 2px solid #e0e0e0;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+.group-subtitle:first-child { margin-top: 0; }
+.group-subtitle-text {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #7f8c8d;
+    font-weight: 600;
+}
+.group-subtitle-count {
+    font-size: 0.7rem;
+    color: #aab;
+}
+.group-subtitle.drag-over {
+    border-bottom-color: #3498db;
+    border-bottom-width: 3px;
 }
 
 /* ── Main Content ──────────────────────────────────────── */
@@ -655,8 +683,8 @@ body {
         <h3>Groups</h3>
         <ul class="group-nav" id="groupNav">
             <li class="active" data-group="all">All groups <span class="group-count">{{ total_count }}</span></li>
-            {% for group_name, group_cards in groups.items() %}
-            <li data-group="{{ group_name }}">{{ group_name }} <span class="group-count">{{ group_cards | length }}</span></li>
+            {% for group in groups %}
+            <li data-group="{{ group.name }}">{{ group.name }} <span class="group-count">{{ group.cards | length }}</span></li>
             {% endfor %}
         </ul>
     </div>
@@ -711,7 +739,15 @@ body {
         </div>
     </div>
 
+    {% set prev_group = namespace(value='') %}
     {% for card in cards %}
+    {% if card.group != prev_group.value %}
+    <div class="group-subtitle" data-group="{{ card.group }}">
+        <span class="group-subtitle-text">{{ card.group }}</span>
+        <span class="group-subtitle-count"></span>
+    </div>
+    {% set prev_group.value = card.group %}
+    {% endif %}
     <div class="card"
          data-slug="{{ card.slug }}"
          data-group="{{ card.group }}"
@@ -887,6 +923,34 @@ document.addEventListener('keydown', function(e) {
     }
 });
 
+/* ── Group subtitles ──────────────────────────────────── */
+function updateGroupSubtitles() {
+    const inGroupView = activeGroupFilter !== 'all';
+    document.querySelectorAll('.group-subtitle').forEach(sub => {
+        if (inGroupView) {
+            // Hide all subtitles when viewing a single group
+            sub.style.display = 'none';
+            return;
+        }
+        const group = sub.dataset.group;
+        // Count visible cards in this group (between this subtitle and the next)
+        let count = 0;
+        let el = sub.nextElementSibling;
+        while (el && !el.classList.contains('group-subtitle')) {
+            if (el.classList.contains('card') && el.style.display !== 'none') {
+                count++;
+            }
+            el = el.nextElementSibling;
+        }
+        if (count === 0) {
+            sub.style.display = 'none';
+        } else {
+            sub.style.display = '';
+            sub.querySelector('.group-subtitle-count').textContent = '(' + count + ')';
+        }
+    });
+}
+
 /* ── Filtering ─────────────────────────────────────────── */
 function getVisibleCards() {
     return cardArray.filter(c => c.style.display !== 'none');
@@ -919,6 +983,7 @@ function applyFilters() {
     });
 
     document.getElementById('cardCount').textContent = `${visible} analyses`;
+    updateGroupSubtitles();
 }
 
 /* Status filter buttons */
@@ -1156,12 +1221,88 @@ function closeGroupDropdown() {
 }
 
 function setGroup(slug, newGroup, label) {
-    // Update DOM
     const card = document.getElementById('card-' + slug);
+    const oldGroup = card.dataset.group;
     card.dataset.group = newGroup;
     label.childNodes[0].textContent = newGroup;
 
-    // Save to server
+    // Move card in DOM to the new group's section
+    const container = document.querySelector('.main');
+    let targetSub = null;
+    let lastCardInGroup = null;
+    document.querySelectorAll('.group-subtitle').forEach(sub => {
+        if (sub.dataset.group === newGroup) targetSub = sub;
+    });
+
+    if (targetSub) {
+        // Find last card in target group
+        let el = targetSub.nextElementSibling;
+        while (el && !el.classList.contains('group-subtitle')) {
+            if (el.classList.contains('card')) lastCardInGroup = el;
+            el = el.nextElementSibling;
+        }
+        if (lastCardInGroup) {
+            lastCardInGroup.after(card);
+        } else {
+            targetSub.after(card);
+        }
+    } else {
+        // New group — create subtitle and append card at end
+        const newSub = document.createElement('div');
+        newSub.className = 'group-subtitle';
+        newSub.dataset.group = newGroup;
+        newSub.innerHTML = '<span class="group-subtitle-text">' + newGroup +
+            '</span> <span class="group-subtitle-count"></span>';
+        container.appendChild(newSub);
+        container.appendChild(card);
+
+        // Add to sidebar
+        const groupNav = document.getElementById('groupNav');
+        const li = document.createElement('li');
+        li.dataset.group = newGroup;
+        li.innerHTML = newGroup + ' <span class="group-count">1</span>';
+        li.addEventListener('click', function() {
+            document.querySelectorAll('#groupNav li').forEach(l => l.classList.remove('active'));
+            li.classList.add('active');
+            activeGroupFilter = newGroup;
+            document.getElementById('currentView').textContent = newGroup;
+            applyFilters();
+        });
+        groupNav.appendChild(li);
+
+        // Make new subtitle droppable
+        newSub.addEventListener('dragover', e => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (draggedCard) { clearDragIndicators(); newSub.classList.add('drag-over'); }
+        });
+        newSub.addEventListener('dragleave', () => newSub.classList.remove('drag-over'));
+        newSub.addEventListener('drop', e => {
+            e.preventDefault();
+            clearDragIndicators();
+            if (!draggedCard) return;
+            newSub.parentNode.insertBefore(draggedCard, newSub.nextElementSibling);
+            handleGroupChange(draggedCard, newGroup);
+            saveCardOrder();
+        });
+    }
+
+    updateGroupSubtitles();
+    updateSidebarGroupCounts();
+
+    // Check if old group is now empty — hide its subtitle
+    let oldGroupHasCards = false;
+    cardArray.forEach(c => { if (c.dataset.group === oldGroup) oldGroupHasCards = true; });
+    if (!oldGroupHasCards) {
+        document.querySelectorAll('.group-subtitle').forEach(sub => {
+            if (sub.dataset.group === oldGroup) sub.style.display = 'none';
+        });
+        document.querySelectorAll('#groupNav li').forEach(li => {
+            if (li.dataset.group === oldGroup) li.remove();
+        });
+    }
+
+    // Save to server (handles both meta.yaml and registry)
     fetch('/api/meta/' + slug, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1399,8 +1540,30 @@ expandAll = function() { _origExpandAll(); saveCollapseState(); };
 /* ── Drag-and-drop reordering ──────────────────────────── */
 const ORDER_KEY = 'labdash-card-order';
 let draggedCard = null;
+let isLiveMode = false; // overridden by live mode script
+
+function buildOrderFromDOM() {
+    /* Read current DOM order and build groups structure.
+       Iterates through .main children: subtitles define group boundaries,
+       cards between subtitles belong to that group. */
+    const container = document.querySelector('.main');
+    const groups = [];
+    let currentGroup = null;
+
+    for (const el of container.children) {
+        if (el.classList.contains('group-subtitle')) {
+            currentGroup = { name: el.dataset.group, analyses: [] };
+            groups.push(currentGroup);
+        } else if (el.classList.contains('card') && currentGroup) {
+            currentGroup.analyses.push(el.dataset.slug);
+        }
+    }
+    // Filter out empty groups
+    return groups.filter(g => g.analyses.length > 0);
+}
 
 function initDragAndDrop() {
+    // Make cards draggable
     cardArray.forEach(card => {
         card.setAttribute('draggable', 'true');
 
@@ -1413,7 +1576,7 @@ function initDragAndDrop() {
 
         card.addEventListener('dragend', () => {
             card.classList.remove('dragging');
-            cardArray.forEach(c => c.classList.remove('drag-over'));
+            clearDragIndicators();
             draggedCard = null;
         });
 
@@ -1421,6 +1584,7 @@ function initDragAndDrop() {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
             if (draggedCard && draggedCard !== card) {
+                clearDragIndicators();
                 card.classList.add('drag-over');
             }
         });
@@ -1431,22 +1595,110 @@ function initDragAndDrop() {
 
         card.addEventListener('drop', e => {
             e.preventDefault();
-            card.classList.remove('drag-over');
+            clearDragIndicators();
             if (!draggedCard || draggedCard === card) return;
 
-            // Move dragged card before drop target
-            const container = card.parentNode;
-            container.insertBefore(draggedCard, card);
+            // Insert dragged card before drop target
+            card.parentNode.insertBefore(draggedCard, card);
 
+            // Update group: card joins the drop target's group
+            const newGroup = card.dataset.group;
+            handleGroupChange(draggedCard, newGroup);
             saveCardOrder();
         });
     });
 
-    // Restore saved order on load
-    restoreCardOrder();
+    // Make group subtitles droppable (dropping on subtitle = first position in that group)
+    document.querySelectorAll('.group-subtitle').forEach(sub => {
+        sub.addEventListener('dragover', e => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (draggedCard) {
+                clearDragIndicators();
+                sub.classList.add('drag-over');
+            }
+        });
+
+        sub.addEventListener('dragleave', () => {
+            sub.classList.remove('drag-over');
+        });
+
+        sub.addEventListener('drop', e => {
+            e.preventDefault();
+            clearDragIndicators();
+            if (!draggedCard) return;
+
+            // Insert dragged card right after the subtitle (first position in group)
+            sub.parentNode.insertBefore(draggedCard, sub.nextElementSibling);
+
+            // Update group: card joins the subtitle's group
+            const newGroup = sub.dataset.group;
+            handleGroupChange(draggedCard, newGroup);
+            saveCardOrder();
+        });
+    });
+
+    // Defer localStorage restore so live mode script can set isLiveMode first.
+    // requestAnimationFrame runs after all synchronous <script> blocks.
+    requestAnimationFrame(() => {
+        restoreCardOrder();
+        updateGroupSubtitles();
+    });
+}
+
+function clearDragIndicators() {
+    document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+}
+
+function handleGroupChange(card, newGroup) {
+    /* Update card's group in DOM and on the card's group label. */
+    const oldGroup = card.dataset.group;
+    if (oldGroup === newGroup) return;
+    card.dataset.group = newGroup;
+    const groupLabel = card.querySelector('.card-group-label');
+    if (groupLabel) groupLabel.childNodes[0].textContent = newGroup;
+    updateGroupSubtitles();
+    updateSidebarGroupCounts();
+}
+
+function updateSidebarGroupCounts() {
+    /* Recount cards per group and update sidebar badges. */
+    const counts = {};
+    cardArray.forEach(c => {
+        const g = c.dataset.group;
+        counts[g] = (counts[g] || 0) + 1;
+    });
+    document.querySelectorAll('#groupNav li').forEach(li => {
+        const g = li.dataset.group;
+        const countEl = li.querySelector('.group-count');
+        if (!countEl) return;
+        if (g === 'all') {
+            countEl.textContent = cardArray.length;
+        } else {
+            countEl.textContent = counts[g] || 0;
+        }
+    });
 }
 
 function saveCardOrder() {
+    /* Save current order. In live mode, posts to API. In static mode, uses localStorage. */
+    if (isLiveMode) {
+        const groups = buildOrderFromDOM();
+        fetch('/api/registry/order', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ groups }),
+        }).catch(() => {
+            // Fall back to localStorage if server unreachable
+            _saveCardOrderLocal();
+        });
+    } else {
+        _saveCardOrderLocal();
+    }
+    updateGroupSubtitles();
+}
+
+function _saveCardOrderLocal() {
     const container = document.querySelector('.main');
     const slugs = [];
     container.querySelectorAll('.card').forEach(c => slugs.push(c.dataset.slug));
@@ -1455,14 +1707,14 @@ function saveCardOrder() {
 }
 
 function restoreCardOrder() {
+    /* Restore localStorage order (static mode only — live mode gets order from registry). */
+    if (isLiveMode) return;
     try {
         const data = localStorage.getItem(ORDER_KEY);
         if (!data) return;
         const slugs = JSON.parse(data);
         const container = document.querySelector('.main');
-        const header = container.querySelector('.main-header');
 
-        // Reorder cards to match saved order
         slugs.forEach(slug => {
             const card = document.getElementById('card-' + slug);
             if (card) container.appendChild(card);
@@ -1479,6 +1731,7 @@ function resetCardOrder() {
 }
 
 initDragAndDrop();
+updateGroupSubtitles();
 
 /* ── Collection title editing ────────────────────────── */
 function editCollectionTitle() {

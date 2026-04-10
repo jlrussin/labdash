@@ -165,7 +165,6 @@ import pandas as pd
     if not meta_path.exists():
         meta_path.write_text('''title: "Example Analysis"
 group: "Examples"
-order: 1
 description: >
   A simple example showing the labdash analysis contract.
   Replace this with your own analysis.
