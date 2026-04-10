@@ -12,18 +12,15 @@ def init_project(target: Path):
     for d in [lib_dir, example_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
-    # labdash.yaml
-    config_path = target / "labdash.yaml"
+    # collection.yaml (collection-level config)
+    config_path = analyses_dir / "collection.yaml"
     if not config_path.exists():
-        config_path.write_text('''# LabDash project configuration
-project_name: "My Project"
-data_dir: "data"                     # where _lib/data_loading.py looks for data
-analyses_dir: "analyses"             # analysis set directory
-output_dir: "_output"                # generated output (gitignore this)
-default_format: png                  # default output format
-publication_format: svg              # format for labdash export figures
-publication_dpi: 300
-server_port: 8800
+        config_path.write_text('''# LabDash collection configuration
+title: "My Analyses"
+# port: 8800                        # server port (default: 8800)
+# output_dir: "_output"             # generated output (default: _output)
+# publication_format: svg            # format for labdash export figures
+# publication_dpi: 300
 ''')
         print(f"  Created {config_path}")
 
@@ -41,6 +38,11 @@ server_port: 8800
 Edit this file to match your project's data format.
 All analysis scripts import from here — this is the single
 source of truth for data loading.
+
+Data is cached in memory after the first load. When using
+`labdash serve`, this means data loads once and subsequent
+analysis runs reuse the cached data. Click "Reload Data"
+in the viewer to clear the cache and reload from disk.
 """
 
 import json
@@ -49,17 +51,23 @@ from pathlib import Path
 import pandas as pd
 
 
-# Path to data directory (relative to project root)
-# This is resolved at import time from labdash.yaml
+# Path to data directory — adjust to match your project layout
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+
+# Module-level cache: data is loaded once and reused across analysis runs
+_cache = None
 
 
 def load_data() -> pd.DataFrame:
     """Load all data into a single DataFrame.
 
+    Returns a copy of the cached DataFrame to prevent mutation.
     Modify this function to match your data format.
-    The default implementation loads JSON files from DATA_DIR.
     """
+    global _cache
+    if _cache is not None:
+        return _cache.copy()
+
     records = []
     data_dir = DATA_DIR
     if not data_dir.exists():
@@ -77,7 +85,14 @@ def load_data() -> pd.DataFrame:
     if not records:
         raise ValueError(f"No data found in {data_dir}")
 
-    return pd.DataFrame(records)
+    _cache = pd.DataFrame(records)
+    return _cache.copy()
+
+
+def clear_cache():
+    """Clear the data cache. Next call to load_data() will reload from disk."""
+    global _cache
+    _cache = None
 ''')
         print(f"  Created {dl_path}")
 
@@ -233,7 +248,8 @@ if __name__ == "__main__":
     else:
         gitignore_path.write_text(f"{ignore_line}\n")
 
-    print(f"\nLabDash project initialized in {target}")
+    print(f"\nLabDash collection initialized in {target}")
     print(f"  Edit analyses/_lib/data_loading.py to match your data format")
     print(f"  Edit analyses/_lib/style.py for your color scheme")
-    print(f"  Run: labdash build")
+    print(f"  Edit analyses/collection.yaml to set title")
+    print(f"  Run: labdash build -c analyses")

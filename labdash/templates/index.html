@@ -96,7 +96,7 @@ body {
     align-items: center;
     margin-bottom: 1.5rem;
 }
-.main-header h2 { font-size: 1.1rem; color: #2c3e50; }
+.main-header h2 { font-size: 0.95rem; color: #7f8c8d; }
 .card-count { font-size: 0.85rem; color: #7f8c8d; }
 
 /* ── Cards ─────────────────────────────────────────────── */
@@ -295,6 +295,25 @@ body {
     cursor: pointer;
 }
 .copy-btn:hover { background: rgba(255,255,255,0.2); }
+.code-block.expanded { max-height: 80vh; }
+.code-expand-btn {
+    margin-top: 0.3rem;
+}
+
+/* ── Run All button ───────────────────────────────────── */
+.btn-run-all {
+    padding: 0.3rem 0.8rem;
+    background: #27ae60;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.btn-run-all:hover { background: #219a52; }
+.btn-run-all:disabled { background: #95a5a6; cursor: not-allowed; }
 
 /* Notes */
 .notes-expandable .expandable-body {
@@ -451,20 +470,26 @@ body {
 }
 .keyboard-hint.visible { opacity: 1; }
 
-/* ── Data filter badge ─────────────────────────────────── */
-.data-badge {
-    display: inline-block;
-    padding: 0.2rem 0.6rem;
-    border-radius: 3px;
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    margin-bottom: 0.8rem;
+/* ── Collection title ─────────────────────────────────── */
+.collection-title {
+    font-size: 1.5rem;
+    color: #2c3e50;
+    margin-bottom: 0.2rem;
+    font-weight: 700;
+    cursor: default;
 }
-.data-badge-test { background: #fef3cd; color: #856404; }
-.data-badge-prod { background: #d4edda; color: #155724; }
-.data-badge-all { background: #d1ecf1; color: #0c5460; }
+.collection-title-input {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #2c3e50;
+    border: 1px solid #3498db;
+    border-radius: 4px;
+    padding: 0.1rem 0.3rem;
+    outline: none;
+    width: 100%;
+    font-family: inherit;
+    margin-bottom: 0.2rem;
+}
 
 /* ── Group subtitle on cards ──────────────────────────── */
 .card-group-label {
@@ -612,8 +637,6 @@ body {
 <!-- Sidebar -->
 <nav class="sidebar">
     <h1>LabDash</h1>
-    {% if project_name %}<div style="font-size:0.75rem;color:#999;margin-top:-0.6rem;margin-bottom:0.6rem;">{{ project_name }}</div>{% endif %}
-    <span class="data-badge data-badge-{{ data_filter }}">{{ data_filter }} data</span>
 
     <input type="text" class="search-box" placeholder="Search analyses..." id="searchBox">
 
@@ -656,6 +679,7 @@ body {
     {% if lib_files %}
     <div class="sidebar-section">
         <h3>Shared Code</h3>
+        <button class="filter-btn reload-data-btn" id="reloadDataBtn" onclick="reloadData()" style="display:none;width:100%;margin-bottom:0.5rem;">Reload Data</button>
         {% for lf in lib_files %}
         <div class="lib-file-item" onclick="openLibFile('{{ lf.name }}')">{{ lf.name }}</div>
         {% endfor %}
@@ -676,9 +700,15 @@ body {
 
 <!-- Main Content -->
 <main class="main">
+    <h1 class="collection-title" id="collectionTitle" onclick="editCollectionTitle()">{{ collection_title }}</h1>
     <div class="main-header">
         <h2 id="currentView">All Analyses</h2>
-        <span class="card-count" id="cardCount">{{ total_count }} analyses</span>
+        <div style="display:flex;align-items:center;gap:0.8rem;">
+            <span class="card-count" id="cardCount">{{ total_count }} analyses</span>
+            <button class="filter-btn" onclick="collapseAll()">Collapse All</button>
+            <button class="filter-btn" onclick="expandAll()">Expand All</button>
+            <button class="btn-run-all" id="runAllBtn" onclick="runAll()" style="display:none;">Run All</button>
+        </div>
     </div>
 
     {% for card in cards %}
@@ -765,6 +795,7 @@ body {
                     <pre class="code-block"><code class="highlight" id="code-content-{{ card.slug }}">{{ card.code_highlighted }}</code></pre>
                 </div>
                 <div class="editor-container" id="editor-{{ card.slug }}"></div>
+                <button class="img-action-btn code-expand-btn" onclick="event.stopPropagation(); toggleCodeExpand(this)">Expand</button>
             </div>
         </div>
 
@@ -1448,6 +1479,105 @@ function resetCardOrder() {
 }
 
 initDragAndDrop();
+
+/* ── Collection title editing ────────────────────────── */
+function editCollectionTitle() {
+    const h1 = document.getElementById('collectionTitle');
+    const current = h1.textContent.trim();
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'collection-title-input';
+    input.value = current;
+    h1.replaceWith(input);
+    input.focus();
+    input.select();
+
+    function save() {
+        const val = input.value.trim() || current;
+        const newH1 = document.createElement('h1');
+        newH1.className = 'collection-title';
+        newH1.id = 'collectionTitle';
+        newH1.onclick = editCollectionTitle;
+        newH1.textContent = val;
+        input.replaceWith(newH1);
+        if (val !== current) {
+            fetch('/api/config', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: val }),
+            }).catch(() => {});
+        }
+    }
+
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { input.value = current; input.blur(); }
+    });
+}
+
+/* ── Code expand/collapse ────────────────────────────── */
+function toggleCodeExpand(btn) {
+    const body = btn.closest('.expandable-body');
+    const codeBlock = body.querySelector('.code-block');
+    const monacoContainer = body.querySelector('[style*="height:400px"]') || body.querySelector('[style*="height:80vh"]');
+    if (codeBlock) {
+        codeBlock.classList.toggle('expanded');
+    }
+    if (monacoContainer) {
+        if (monacoContainer.style.height === '80vh') {
+            monacoContainer.style.height = '400px';
+        } else {
+            monacoContainer.style.height = '80vh';
+        }
+    }
+    btn.textContent = btn.textContent === 'Expand' ? 'Collapse' : 'Expand';
+}
+
+/* ── Run All ─────────────────────────────────────────── */
+async function runAll() {
+    const btn = document.getElementById('runAllBtn');
+    btn.disabled = true;
+
+    const visible = getVisibleCards();
+    const total = visible.length;
+    let done = 0;
+    let failed = 0;
+
+    for (const card of visible) {
+        const slug = card.dataset.slug;
+        done++;
+        btn.textContent = 'Running ' + done + '/' + total + '...';
+
+        try {
+            const resp = await fetch('/api/run/' + slug, { method: 'POST' });
+            const data = await resp.json();
+            if (data.success) {
+                const outputDiv = card.querySelector('.card-output');
+                const errorEl = card.querySelector('.error-display');
+                errorEl.style.display = 'none';
+                if (data.image) {
+                    outputDiv.innerHTML = '<img src="' + data.image + '" alt="' + slug + '">';
+                } else if (data.table_html) {
+                    outputDiv.innerHTML = '<div class="card-output-table-wrapper">' + data.table_html + '</div>';
+                }
+                const staleBadge = card.querySelector('.badge-stale');
+                if (staleBadge) staleBadge.remove();
+            } else {
+                failed++;
+                const errorEl = card.querySelector('.error-display');
+                errorEl.textContent = data.stderr || 'Unknown error';
+                errorEl.style.display = 'block';
+            }
+        } catch(e) {
+            failed++;
+        }
+    }
+
+    btn.textContent = failed ? (total - failed) + '/' + total + ' OK' : 'All Done!';
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = 'Run All'; }, 3000);
+}
 
 /* ── Live mode detection ───────────────────────────────── */
 /* When served via labdash serve, the server injects a script that enables

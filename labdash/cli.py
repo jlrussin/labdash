@@ -8,8 +8,19 @@ import yaml
 
 
 def _load_config(start_dir: Path | None = None) -> dict:
-    """Find and load labdash.yaml from start_dir or cwd, walking up."""
+    """Find and load config, preferring collection.yaml then labdash.yaml."""
     search = start_dir or Path.cwd()
+
+    # First check for collection.yaml in start_dir (collection-level config)
+    collection_cfg = search / "collection.yaml"
+    if collection_cfg.exists():
+        with open(collection_cfg) as f:
+            config = yaml.safe_load(f) or {}
+        config["_root"] = search
+        config.setdefault("analyses_dir", ".")  # collection dir is the analyses dir
+        return config
+
+    # Fall back to labdash.yaml (legacy project-level config)
     for d in [search, *search.parents]:
         cfg_path = d / "labdash.yaml"
         if cfg_path.exists():
@@ -29,9 +40,18 @@ def _resolve_dirs(config: dict) -> tuple[Path, Path]:
 
 
 def _apply_collection_override(config: dict, collection: str | None):
-    """Override analyses_dir in config if --collection was given."""
+    """Override analyses_dir if --collection was given, merging collection.yaml."""
     if collection:
         config["analyses_dir"] = collection
+        # If the collection dir has its own collection.yaml, merge it in
+        collection_cfg = config["_root"] / collection / "collection.yaml"
+        if collection_cfg.exists():
+            with open(collection_cfg) as f:
+                coll_config = yaml.safe_load(f) or {}
+            # Collection-level settings override project-level
+            for key in ("title", "port", "output_dir", "publication_format", "publication_dpi"):
+                if key in coll_config:
+                    config[key] = coll_config[key]
 
 
 def cmd_build(args):
@@ -67,7 +87,7 @@ def cmd_serve(args):
 
     config = _load_config()
     _apply_collection_override(config, getattr(args, "collection", None))
-    port = args.port or config.get("server_port", 8800)
+    port = args.port or config.get("port", config.get("server_port", 8800))
 
     from .server import create_app
     app = create_app(config)

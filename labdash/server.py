@@ -3,7 +3,6 @@
 import base64
 import difflib
 import json
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -18,7 +17,7 @@ try:
 except ImportError:
     raise ImportError("Install serve extras: pip install labdash[serve]")
 
-from .runner import discover_analyses
+from .runner import discover_analyses, run_analysis
 from .builder import build_dashboard
 
 
@@ -33,6 +32,12 @@ class MetaUpdate(BaseModel):
     order: int | None = None
     description: str | None = None
     methodology: str | None = None
+
+
+class ConfigUpdate(BaseModel):
+    title: str | None = None
+
+
 
 
 def _append_change_log(analyses_dir: Path, slug: str, change_type: str, details: str):
@@ -96,46 +101,27 @@ def create_app(config: dict) -> FastAPI:
 
     @app.post("/api/run/{slug}")
     def run_analysis_endpoint(slug: str):
-        """Execute an analysis and return the result."""
+        """Execute an analysis in-process and return the result."""
         analyses = discover_analyses(analyses_dir)
         match = [a for a in analyses if a["slug"] == slug]
         if not match:
             raise HTTPException(404, f"Analysis '{slug}' not found")
         analysis = match[0]
 
+        # Run in-process (importlib) for data caching benefits
+        result = run_analysis(analysis, output_dir)
+
         slug_output = output_dir / slug
-        slug_output.mkdir(parents=True, exist_ok=True)
-
-        # Run in subprocess for isolation
-        script = analysis["analysis_path"]
-        result = subprocess.run(
-            [sys.executable, str(script)],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            cwd=str(script.parent),
-            env={
-                **__import__("os").environ,
-                "PYTHONPATH": f"{analyses_dir}{__import__('os').pathsep}{analyses_dir.parent}",
-            },
-        )
-
         response = {
             "slug": slug,
-            "success": result.returncode == 0,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "success": result["success"],
+            "stdout": "",
+            "stderr": result.get("error", ""),
         }
 
-        if result.returncode == 0:
-            # Check for output files
+        if result["success"]:
             for ext in [".png", ".svg", ".jpg"]:
                 img_path = slug_output / f"output{ext}"
-                # Analysis writes to its own dir when run standalone
-                standalone_img = script.parent / f"output{ext}"
-                if standalone_img.exists():
-                    # Move to output dir
-                    standalone_img.rename(img_path)
                 if img_path.exists():
                     data = base64.b64encode(img_path.read_bytes()).decode()
                     mime = {"png": "image/png", "svg": "image/svg+xml", "jpg": "image/jpeg"}
@@ -143,16 +129,10 @@ def create_app(config: dict) -> FastAPI:
                     break
 
             stats_path = slug_output / "stats.json"
-            standalone_stats = script.parent / "stats.json"
-            if standalone_stats.exists():
-                standalone_stats.rename(stats_path)
             if stats_path.exists():
                 response["stats"] = json.loads(stats_path.read_text())
 
             table_path = slug_output / "output.html"
-            standalone_table = script.parent / "output.html"
-            if standalone_table.exists():
-                standalone_table.rename(table_path)
             if table_path.exists():
                 response["table_html"] = table_path.read_text()
 
@@ -236,6 +216,36 @@ def create_app(config: dict) -> FastAPI:
 
         return {"status": "saved", "slug": slug, "updated": updated}
 
+    @app.patch("/api/config")
+    def update_config(update: ConfigUpdate):
+        """Update collection-level config (collection.yaml or labdash.yaml)."""
+        # Prefer collection.yaml, fall back to labdash.yaml
+        config_path = analyses_dir / "collection.yaml"
+        if not config_path.exists():
+            config_path = root / "labdash.yaml"
+
+        if config_path.exists():
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+        else:
+            cfg = {}
+
+        for key, value in update.model_dump(exclude_none=True).items():
+            cfg[key] = value
+
+        with open(config_path, "w") as f:
+            yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+        return {"status": "saved", "path": str(config_path)}
+
+    @app.post("/api/reload-data")
+    def reload_data():
+        """Clear data cache by removing _lib modules from sys.modules."""
+        to_remove = [k for k in sys.modules if '_lib' in k]
+        for k in to_remove:
+            del sys.modules[k]
+        return {"status": "reloaded", "cleared": len(to_remove)}
+
     # ── Serve the dashboard ────────────────────────────────
 
     @app.get("/")
@@ -260,6 +270,39 @@ def _get_live_mode_script() -> str:
 <!-- Monaco Editor loader from CDN -->
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
 <script>
+/* ── Live Mode: Show live-only buttons ──────────────── */
+(function() {
+    const reloadBtn = document.getElementById('reloadDataBtn');
+    if (reloadBtn) reloadBtn.style.display = '';
+    const runAllBtn = document.getElementById('runAllBtn');
+    if (runAllBtn) runAllBtn.style.display = '';
+})();
+
+window.reloadData = async function() {
+    const btn = document.getElementById('reloadDataBtn');
+    btn.textContent = 'Reloading...';
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/reload-data', { method: 'POST' });
+        if (resp.ok) {
+            btn.textContent = 'Reloaded!';
+            document.querySelectorAll('.card').forEach(card => {
+                if (!card.querySelector('.badge-stale')) {
+                    const badges = card.querySelector('.card-badges');
+                    const stale = document.createElement('span');
+                    stale.className = 'badge badge-stale';
+                    stale.textContent = 'stale';
+                    badges.appendChild(stale);
+                }
+            });
+        }
+    } catch(e) {
+        btn.textContent = 'Error!';
+    }
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = 'Reload Data'; }, 2000);
+};
+
 /* ── Live Mode: Unified Monaco Editor ──────────────────── */
 (function() {
     require.config({

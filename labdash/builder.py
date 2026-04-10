@@ -135,7 +135,15 @@ def _build_lib_data(analyses_dir: Path) -> list[dict]:
 
 
 def _load_project_config(analyses_dir: Path) -> dict:
-    """Load labdash.yaml from the project root."""
+    """Load config: collection.yaml in analyses_dir, then labdash.yaml walking up."""
+    # Prefer collection-level config
+    collection_cfg = analyses_dir / "collection.yaml"
+    if collection_cfg.exists():
+        with open(collection_cfg) as f:
+            config = yaml.safe_load(f) or {}
+        return config
+
+    # Fall back to labdash.yaml
     for d in [analyses_dir, analyses_dir.parent, analyses_dir.parent.parent]:
         cfg = d / "labdash.yaml"
         if cfg.exists():
@@ -168,10 +176,12 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
     # Shared _lib files for sidebar
     lib_files = _build_lib_data(analyses_dir)
 
-    # Project config for data filter badge
+    # Project/collection config
     config = _load_project_config(analyses_dir)
-    data_filter = config.get("data_filter", "all")
-    project_name = config.get("project_name", "")
+    # Collection title: from config, or prettified directory name
+    collection_title = config.get("title", config.get("project_name", ""))
+    if not collection_title:
+        collection_title = analyses_dir.name.replace("_", " ").replace("-", " ").title()
 
     # Load templates
     template_dir = Path(__file__).parent / "templates"
@@ -189,8 +199,7 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
         pygments_css=pygments_css,
         total_count=len(cards),
         lib_files=lib_files,
-        data_filter=data_filter,
-        project_name=project_name,
+        collection_title=collection_title,
     )
 
     index_path = output_dir / "index.html"
