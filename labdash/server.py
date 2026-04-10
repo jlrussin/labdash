@@ -218,11 +218,9 @@ def create_app(config: dict) -> FastAPI:
 
     @app.patch("/api/config")
     def update_config(update: ConfigUpdate):
-        """Update collection-level config (collection.yaml or labdash.yaml)."""
-        # Prefer collection.yaml, fall back to labdash.yaml
+        """Update collection-level config (collection.yaml)."""
+        # Always write to collection.yaml so each collection has its own config
         config_path = analyses_dir / "collection.yaml"
-        if not config_path.exists():
-            config_path = root / "labdash.yaml"
 
         if config_path.exists():
             with open(config_path) as f:
