@@ -292,8 +292,12 @@ Requires the `serve` extras: `pip install labdash[serve]`.
 The live server adds:
 - A Monaco code editor (replacing the static Pygments view).
 - Edit / Save / Run / Save & Run buttons on each analysis card.
+- **Run All** button in the header -- runs all visible analyses sequentially with progress indicator.
+- **Reload Data** button in the sidebar -- clears `_lib` modules from `sys.modules`, forcing the next run to re-read data from disk. Marks all cards as stale.
 - Editable group, tags, and status fields directly in the viewer.
 - All edits are written back to the source files on disk.
+
+**Execution model:** All analyses run **in-process** (no subprocesses). This means `_lib` modules stay loaded in `sys.modules` across runs, so data loading functions that use module-level caching only read from disk once. Subsequent runs reuse cached data until the user clicks "Reload Data".
 
 ### `labdash export figures`
 
@@ -395,8 +399,8 @@ _lib/
 
 **How agents should use it:**
 
-- **`data_loading.py`** -- all analyses import `load_data()` from here. When the data format changes, update this one file.
-- **`style.py`** -- defines `apply_style()`, color palettes, font sizes, and figure defaults. Call `apply_style()` at the top of every `run()` function.
+- **`data_loading.py`** -- all analyses import `load_data()` from here. When the data format changes, update this one file. **Recommended:** add module-level caching (e.g., `_cache = {}`) so that data is loaded from disk only once per `labdash build` or `labdash serve` session. Return copies (e.g., `df.copy()`, `copy.deepcopy()`) to prevent cross-analysis mutation. The cache is automatically destroyed when the user clicks "Reload Data" in the viewer (which clears `_lib` from `sys.modules`).
+- **`style.py`** -- defines `apply_style()`, color palettes, font sizes, and figure defaults. Call `apply_style()` at the top of every `run()` function. **Important:** include `matplotlib.use("agg")` before importing `pyplot` to avoid `RuntimeError` when running in server threads.
 - **`preprocessing.py`** -- put transformations here when two or more analyses need the same filtering, grouping, or derived columns.
 - Agents should never duplicate data-loading or preprocessing logic in individual analysis scripts. If a transformation is used in more than one analysis, move it to `_lib/`.
 

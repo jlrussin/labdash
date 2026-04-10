@@ -105,6 +105,8 @@ Edit this file to change colors, fonts, and figure defaults
 across all plots. All analysis scripts import from here.
 """
 
+import matplotlib
+matplotlib.use("agg")  # non-interactive backend, required for labdash serve
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -186,9 +188,9 @@ from pathlib import Path
 # Ensure _lib is importable
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from _lib.style import apply_style, COLORS  # import before pyplot (sets agg backend)
 import matplotlib.pyplot as plt
 import numpy as np
-from _lib.style import apply_style, COLORS
 
 # ── Aesthetic variables ──────────────────────────────────
 FIGSIZE = (8, 5)

@@ -4,6 +4,8 @@ Edit colors, fonts, and figure defaults here. All analysis
 scripts import from this module for consistent styling.
 """
 
+import matplotlib
+matplotlib.use("agg")  # non-interactive backend, required for labdash serve
 import matplotlib.pyplot as plt
 import seaborn as sns
 

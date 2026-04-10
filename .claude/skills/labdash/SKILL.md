@@ -32,9 +32,9 @@ while not (_d / "_lib").is_dir():
     _d = _d.parent
 sys.path.insert(0, str(_d))
 
+from _lib.style import apply_style, RELEVANT_COLORS  # import before pyplot (sets agg backend)
 import matplotlib.pyplot as plt
 from _lib.data_loading import load_data_function
-from _lib.style import apply_style, RELEVANT_COLORS
 
 # ── Aesthetic variables ──────────────────────────────────
 # (Convention: grouped at top for easy human tweaking)
@@ -287,6 +287,7 @@ def run(output_dir: Path) -> dict:
 - Contains functions like `load_all_participants()`, `build_trial_dataframe()`
 - Returns DataFrames with a `participant_id` column for multi-participant analysis
 - Handles JSON parsing, type conversions, filtering
+- **Should use module-level caching** (`_cache = {}`) so data is loaded from disk once per process. Return copies (`df.copy()`, `copy.deepcopy()`) to prevent cross-analysis mutation. Cache is destroyed when "Reload Data" clears `_lib` from `sys.modules`.
 
 ### preprocessing.py
 - Contains shared transforms used by multiple analyses
@@ -294,9 +295,9 @@ def run(output_dir: Path) -> dict:
 - Keep analysis-specific logic in the analysis scripts themselves
 
 ### style.py
+- Must include `matplotlib.use("agg")` before importing `pyplot` to avoid `RuntimeError` in server threads
 - `apply_style()` — call at the start of every analysis
-- `PHASE_COLORS`, `CONDITION_COLORS` — use for consistent coloring
-- `phase_color(phase)` — helper that works with both full and short phase names
+- Color palettes, font sizes, and figure defaults
 - `DEFAULT_DPI`, `DEFAULT_FIGSIZE` — shared defaults
 
 ## 9. Handling Dependencies
