@@ -2,12 +2,15 @@
 
 import importlib.util
 import json
+import math
 import sys
 import time
 import traceback
 from pathlib import Path
 
 import yaml
+
+from . import _context
 
 
 def discover_analyses(analyses_dir: Path) -> list[dict]:
@@ -123,8 +126,180 @@ def _resolve_run_order(analyses: list[dict]) -> list[dict]:
     return order
 
 
+# ── Staleness ──────────────────────────────────────────────────────────
+
+
+def _oldest_output_mtime(output_dir: Path) -> float | None:
+    """Mtime of the oldest file in output_dir, or None if none exist.
+
+    Used as the "baseline" for a slug: if anything is newer than this,
+    the slug is stale. Ignores subdirectories.
+    """
+    if not output_dir.exists():
+        return None
+    mtimes = [p.stat().st_mtime for p in output_dir.iterdir() if p.is_file()]
+    if not mtimes:
+        return None
+    return min(mtimes)
+
+
+def _newest_output_mtime(output_dir: Path) -> float:
+    """Mtime of the newest file in output_dir, or -inf if none exist.
+
+    Used as the "latest produced" mtime for an upstream dep: if this is
+    newer than a downstream's baseline, the downstream is stale.
+    """
+    if not output_dir.exists():
+        return -math.inf
+    mtimes = [p.stat().st_mtime for p in output_dir.iterdir() if p.is_file()]
+    if not mtimes:
+        return -math.inf
+    return max(mtimes)
+
+
+def is_stale(
+    slug: str,
+    by_slug: dict[str, dict],
+    output_root: Path,
+    _memo: dict[str, bool] | None = None,
+) -> bool:
+    """Return True if `slug` needs to be rerun.
+
+    Transitive rules:
+    - self-stale if analysis.py is newer than the oldest of its output files
+      (or if its output dir is empty);
+    - dep-stale if any upstream dep's newest output is newer than this
+      slug's oldest output;
+    - recursively stale if any upstream dep is itself stale.
+
+    Memoization prevents exponential re-traversal in deep DAGs.
+    """
+    if _memo is None:
+        _memo = {}
+    if slug in _memo:
+        return _memo[slug]
+
+    analysis = by_slug.get(slug)
+    if analysis is None:
+        # Missing analysis; treat as stale so the caller surfaces the problem.
+        _memo[slug] = True
+        return True
+
+    out_dir = output_root / slug
+    my_oldest = _oldest_output_mtime(out_dir)
+
+    # No output yet → stale.
+    if my_oldest is None:
+        _memo[slug] = True
+        return True
+
+    # Self-stale: source newer than my oldest output.
+    if analysis["analysis_path"].stat().st_mtime > my_oldest:
+        _memo[slug] = True
+        return True
+
+    for dep in analysis["meta"].get("dependencies", []) or []:
+        dep_dir = output_root / dep
+        dep_newest = _newest_output_mtime(dep_dir)
+        if dep_newest > my_oldest:
+            _memo[slug] = True
+            return True
+        if is_stale(dep, by_slug, output_root, _memo):
+            _memo[slug] = True
+            return True
+
+    _memo[slug] = False
+    return False
+
+
+def transitive_deps(slug: str, by_slug: dict[str, dict]) -> list[str]:
+    """All transitive dependency slugs of `slug`, excluding `slug` itself.
+
+    Order within the list is not meaningful; callers that care should
+    feed the result back through a topological sort.
+    """
+    collected: set[str] = set()
+    stack = [slug]
+    while stack:
+        current = stack.pop()
+        a = by_slug.get(current)
+        if a is None:
+            continue
+        for dep in a["meta"].get("dependencies", []) or []:
+            if dep not in collected:
+                collected.add(dep)
+                stack.append(dep)
+    collected.discard(slug)
+    return list(collected)
+
+
+def expand_with_stale_upstream(
+    target_slugs: list[str],
+    all_analyses: list[dict],
+    output_root: Path,
+) -> list[dict]:
+    """Expand target slugs with all transitively-stale upstream, topo-sorted.
+
+    For each target slug:
+    - the target itself is always included (Run means run);
+    - any transitive dep that `is_stale` is also included.
+
+    Topological sort is over the full DAG (all_analyses), then filtered
+    to the final set so that run order respects deps even if intermediate
+    non-stale nodes are skipped.
+    """
+    by_slug = {a["slug"]: a for a in all_analyses}
+    memo: dict[str, bool] = {}
+
+    to_run: set[str] = set()
+    for slug in target_slugs:
+        if slug not in by_slug:
+            continue
+        to_run.add(slug)
+        for dep in transitive_deps(slug, by_slug):
+            if is_stale(dep, by_slug, output_root, memo):
+                to_run.add(dep)
+
+    # Topo-sort the full DAG; filter to to_run (preserves dependency order
+    # even when some intermediate nodes are fresh).
+    full_order = _resolve_run_order(all_analyses)
+    return [a for a in full_order if a["slug"] in to_run]
+
+
+def stale_only(
+    all_analyses: list[dict],
+    output_root: Path,
+) -> list[dict]:
+    """Return all stale analyses in topo order."""
+    by_slug = {a["slug"]: a for a in all_analyses}
+    memo: dict[str, bool] = {}
+    stale_slugs = {a["slug"] for a in all_analyses
+                   if is_stale(a["slug"], by_slug, output_root, memo)}
+    full_order = _resolve_run_order(all_analyses)
+    return [a for a in full_order if a["slug"] in stale_slugs]
+
+
+# ── Collection config loading ──────────────────────────────────────────
+
+
+def _load_collection_config(analyses_root: Path) -> dict:
+    """Load collection.yaml from the analyses directory, or return {}."""
+    cfg = analyses_root / "collection.yaml"
+    if cfg.exists():
+        with open(cfg) as f:
+            return yaml.safe_load(f) or {}
+    return {}
+
+
+# ── Execution ──────────────────────────────────────────────────────────
+
+
 def run_analysis(analysis: dict, output_dir: Path) -> dict:
-    """Execute a single analysis script. Returns result dict."""
+    """Execute a single analysis script. Returns result dict.
+
+    `output_dir` here is the collection-level output root (e.g. _output/pilot1_test/);
+    the slug-level output dir is output_dir / slug.
+    """
     slug = analysis["slug"]
     analysis_path = analysis["analysis_path"]
     analyses_root = analysis_path.parent.parent
@@ -139,6 +314,8 @@ def run_analysis(analysis: dict, output_dir: Path) -> dict:
         if path_str not in sys.path and (path / "_lib").is_dir():
             sys.path.insert(0, path_str)
 
+    collection_config = _load_collection_config(analyses_root)
+
     result = {
         "slug": slug,
         "success": False,
@@ -149,6 +326,12 @@ def run_analysis(analysis: dict, output_dir: Path) -> dict:
 
     t0 = time.time()
     try:
+        _context.set_current(
+            collection_dir=analyses_root,
+            output_root=output_dir,
+            output_dir=slug_output,
+            collection_config=collection_config,
+        )
         spec = importlib.util.spec_from_file_location(f"analysis_{slug}", str(analysis_path))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -162,27 +345,53 @@ def run_analysis(analysis: dict, output_dir: Path) -> dict:
     except Exception:
         result["error"] = traceback.format_exc()
     finally:
+        _context.clear()
         result["duration_s"] = round(time.time() - t0, 2)
 
     return result
 
 
-def run_all(analyses_dir: Path, output_dir: Path, slugs: list[str] | None = None) -> list[dict]:
-    """Discover and run analyses. If slugs provided, only run those."""
+def run_all(
+    analyses_dir: Path,
+    output_dir: Path,
+    slugs: list[str] | None = None,
+    *,
+    only_stale: bool = False,
+) -> list[dict]:
+    """Discover and run analyses.
+
+    - `slugs=None, only_stale=False` (default): force-run everything in topo order.
+    - `slugs=None, only_stale=True`: run every stale analysis in topo order.
+    - `slugs=[...], only_stale=False`: run those slugs AND any transitively-stale
+      upstream of them, in topo order. (The slugs themselves always run.)
+    - `slugs=[...], only_stale=True`: same as above, but targets only run if they
+      are themselves stale.
+    """
     all_analyses = discover_analyses(analyses_dir)
+
     if slugs:
         slug_set = set(slugs)
-        to_run = [a for a in all_analyses if a["slug"] in slug_set]
-        missing = slug_set - {a["slug"] for a in to_run}
+        known = {a["slug"] for a in all_analyses}
+        missing = slug_set - known
         if missing:
             print(f"Warning: analyses not found: {', '.join(sorted(missing))}")
+        to_run = expand_with_stale_upstream(list(slug_set & known), all_analyses, output_dir)
+        if only_stale:
+            by_slug = {a["slug"]: a for a in all_analyses}
+            memo: dict[str, bool] = {}
+            to_run = [a for a in to_run
+                      if is_stale(a["slug"], by_slug, output_dir, memo)]
     else:
-        to_run = all_analyses
+        if only_stale:
+            to_run = stale_only(all_analyses, output_dir)
+        else:
+            to_run = _resolve_run_order(all_analyses)
 
-    ordered = _resolve_run_order(to_run)
     results = []
-    for a in ordered:
-        print(f"  Running {a['slug']}...", end=" ", flush=True)
+    target_set = set(slugs) if slugs else set()
+    for a in to_run:
+        note = "" if (not target_set or a["slug"] in target_set) else "  (upstream)"
+        print(f"  Running {a['slug']}...{note}", end=" ", flush=True)
         r = run_analysis(a, output_dir)
         status = "OK" if r["success"] else "FAIL"
         print(f"{status} ({r['duration_s']}s)")

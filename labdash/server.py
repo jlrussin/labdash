@@ -17,7 +17,14 @@ try:
 except ImportError:
     raise ImportError("Install serve extras: pip install labdash[serve]")
 
-from .runner import discover_analyses, run_analysis, load_registry, _is_new_format_registry
+from .runner import (
+    discover_analyses,
+    run_analysis,
+    load_registry,
+    _is_new_format_registry,
+    expand_with_stale_upstream,
+    stale_only,
+)
 from .builder import build_dashboard
 
 
@@ -119,9 +126,8 @@ def _move_slug_in_registry(analyses_dir: Path, slug: str, old_group: str | None,
 
 def create_app(config: dict) -> FastAPI:
     """Create the FastAPI application."""
-    root = config["_root"]
-    analyses_dir = root / config.get("analyses_dir", "analyses")
-    output_dir = root / config.get("output_dir", "_output")
+    from .cli import _resolve_dirs
+    analyses_dir, output_dir = _resolve_dirs(config)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     app = FastAPI(title="LabDash")
@@ -146,44 +152,80 @@ def create_app(config: dict) -> FastAPI:
             })
         return result
 
-    @app.post("/api/run/{slug}")
-    def run_analysis_endpoint(slug: str):
-        """Execute an analysis in-process and return the result."""
-        analyses = discover_analyses(analyses_dir)
-        match = [a for a in analyses if a["slug"] == slug]
-        if not match:
-            raise HTTPException(404, f"Analysis '{slug}' not found")
-        analysis = match[0]
-
-        # Run in-process (importlib) for data caching benefits
-        result = run_analysis(analysis, output_dir)
-
+    def _slug_payload(slug: str, result: dict) -> dict:
+        """Build the viewer-facing response payload for one run result."""
         slug_output = output_dir / slug
-        response = {
+        payload = {
             "slug": slug,
             "success": result["success"],
-            "stdout": "",
-            "stderr": result.get("error", ""),
+            "stderr": result.get("error", "") or "",
         }
+        if not result["success"]:
+            return payload
+        for ext in [".png", ".svg", ".jpg"]:
+            img_path = slug_output / f"output{ext}"
+            if img_path.exists():
+                data = base64.b64encode(img_path.read_bytes()).decode()
+                mime = {"png": "image/png", "svg": "image/svg+xml", "jpg": "image/jpeg"}
+                payload["image"] = f"data:{mime.get(ext[1:], 'image/png')};base64,{data}"
+                break
+        stats_path = slug_output / "stats.json"
+        if stats_path.exists():
+            payload["stats"] = json.loads(stats_path.read_text())
+        table_path = slug_output / "output.html"
+        if table_path.exists():
+            payload["table_html"] = table_path.read_text()
+        return payload
 
-        if result["success"]:
-            for ext in [".png", ".svg", ".jpg"]:
-                img_path = slug_output / f"output{ext}"
-                if img_path.exists():
-                    data = base64.b64encode(img_path.read_bytes()).decode()
-                    mime = {"png": "image/png", "svg": "image/svg+xml", "jpg": "image/jpeg"}
-                    response["image"] = f"data:{mime.get(ext[1:], 'image/png')};base64,{data}"
-                    break
+    @app.post("/api/run/{slug}")
+    def run_analysis_endpoint(slug: str):
+        """Run the target slug plus any transitively-stale upstream, in topo order.
 
-            stats_path = slug_output / "stats.json"
-            if stats_path.exists():
-                response["stats"] = json.loads(stats_path.read_text())
+        The target itself always runs (explicit click = explicit run). Upstream
+        nodes run only if stale. Returns the target's payload plus a list of
+        any additional slugs that ran so the viewer can refresh their cards.
+        """
+        analyses = discover_analyses(analyses_dir)
+        if not any(a["slug"] == slug for a in analyses):
+            raise HTTPException(404, f"Analysis '{slug}' not found")
 
-            table_path = slug_output / "output.html"
-            if table_path.exists():
-                response["table_html"] = table_path.read_text()
+        chain = expand_with_stale_upstream([slug], analyses, output_dir)
 
-        return response
+        upstream_payloads: list[dict] = []
+        target_payload: dict | None = None
+        for a in chain:
+            result = run_analysis(a, output_dir)
+            payload = _slug_payload(a["slug"], result)
+            if a["slug"] == slug:
+                target_payload = payload
+            else:
+                upstream_payloads.append(payload)
+            if not result["success"]:
+                # Abort the chain on first failure so downstream doesn't run
+                # against stale/missing artifacts.
+                break
+
+        if target_payload is None:
+            # Shouldn't happen since expand_with_stale_upstream always includes the target,
+            # but guard against partial chain abort.
+            target_payload = {"slug": slug, "success": False,
+                              "stderr": "target did not run (upstream failure?)"}
+        target_payload["upstream"] = upstream_payloads
+        target_payload["stdout"] = ""
+        return target_payload
+
+    @app.post("/api/run-all-stale")
+    def run_all_stale_endpoint():
+        """Run every transitively-stale analysis in topo order."""
+        analyses = discover_analyses(analyses_dir)
+        chain = stale_only(analyses, output_dir)
+        results = []
+        for a in chain:
+            result = run_analysis(a, output_dir)
+            results.append(_slug_payload(a["slug"], result))
+            if not result["success"]:
+                break
+        return {"ran": results, "total": len(chain)}
 
     @app.put("/api/code/{slug}")
     def save_code(slug: str, update: CodeUpdate):
@@ -421,6 +463,8 @@ def _get_live_mode_script() -> str:
     if (reloadBtn) reloadBtn.style.display = '';
     const runAllBtn = document.getElementById('runAllBtn');
     if (runAllBtn) runAllBtn.style.display = '';
+    const runAllStaleBtn = document.getElementById('runAllStaleBtn');
+    if (runAllStaleBtn) runAllStaleBtn.style.display = '';
     // Hide reset order button in live mode (order is persisted to registry)
     const resetBtn = document.getElementById('resetOrderBtn');
     if (resetBtn) resetBtn.style.display = 'none';
@@ -685,6 +729,14 @@ window.reloadData = async function() {
                     const resp = await fetch('/api/run/' + slug, {method: 'POST'});
                     const data = await resp.json();
                     overlay.remove();
+                    // Refresh upstream cards that were run as part of the chain.
+                    if (data.upstream && Array.isArray(data.upstream)) {
+                        for (const up of data.upstream) {
+                            if (typeof applyRunPayload === 'function') {
+                                applyRunPayload(up.slug, up);
+                            }
+                        }
+                    }
                     if (data.success) {
                         if (data.image) {
                             outputDiv.innerHTML = '<img src="' + data.image + '" alt="' + slug + '">';

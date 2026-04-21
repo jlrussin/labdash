@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from .runner import discover_analyses, run_analysis
+from .runner import discover_analyses, run_analysis, _resolve_run_order
 
 
 def export_figures(analyses_dir: Path, output_dir: Path, dest: Path, *,
@@ -25,6 +25,12 @@ def export_figures(analyses_dir: Path, output_dir: Path, dest: Path, *,
     for a in pub:
         slug = a["slug"]
         meta = a["meta"]
+        # Pipeline nodes have no figure by default — skip unless a figure_id
+        # is explicitly set (signals the scientist wants the optional image
+        # that the pipeline node produced).
+        if meta.get("output_format") == "pipeline" and not meta.get("figure_id"):
+            print(f"  Skipping {slug} (pipeline node, no figure_id)")
+            continue
         figure_id = meta.get("figure_id", slug)
 
         # Temporarily patch output format in the environment
@@ -45,7 +51,11 @@ def export_figures(analyses_dir: Path, output_dir: Path, dest: Path, *,
 
         # Find the output file and copy with figure_id name
         for ext in [f".{fmt}", ".png", ".svg", ".pdf"]:
-            src = temp_out / f"output{ext}"
+            src = temp_out / slug / f"output{ext}"
+            if not src.exists():
+                # run_analysis writes to temp_out / slug; keep legacy location
+                # as a fallback in case older analyses wrote to output_dir directly.
+                src = temp_out / f"output{ext}"
             if src.exists():
                 dest_name = f"{figure_id}{ext}"
                 shutil.copy2(src, dest / dest_name)
@@ -67,7 +77,12 @@ def export_figures(analyses_dir: Path, output_dir: Path, dest: Path, *,
 
 
 def export_code(analyses_dir: Path, dest: Path, *, status: str = "publication"):
-    """Gather analysis scripts + _lib into a self-contained directory."""
+    """Gather analysis scripts + _lib into a self-contained directory.
+
+    Includes pipeline-node analyses too, since they're real code with
+    downstream dependents. run_all.py emits slugs in dependency order
+    so transforms precede the leaves that consume them.
+    """
     analyses = discover_analyses(analyses_dir)
     pub = [a for a in analyses if a["meta"].get("status") == status]
 
@@ -77,8 +92,11 @@ def export_code(analyses_dir: Path, dest: Path, *, status: str = "publication"):
 
     dest.mkdir(parents=True, exist_ok=True)
 
-    # Copy _lib
+    # Copy _lib (including _lib/plots/ if present)
     lib_src = analyses_dir / "_lib"
+    if not lib_src.exists():
+        # Maybe _lib/ is one level up (collection-layout projects)
+        lib_src = analyses_dir.parent / "_lib"
     lib_dest = dest / "_lib"
     if lib_src.exists():
         if lib_dest.exists():
@@ -97,8 +115,10 @@ def export_code(analyses_dir: Path, dest: Path, *, status: str = "publication"):
             shutil.copy2(meta_src, slug_dest / "meta.yaml")
         print(f"  Copied {slug}/")
 
-    # Generate a simple run_all.py
-    run_all_code = '''"""Run all analyses to reproduce figures."""
+    # Emit run_all.py with slugs in dependency order (topological sort on the
+    # published subset — deps outside the published set are silently dropped).
+    ordered = _resolve_run_order(pub)
+    run_all_code = '''"""Run all analyses to reproduce figures (in dependency order)."""
 import sys
 from pathlib import Path
 
@@ -107,7 +127,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 ANALYSES = [
 '''
-    for a in pub:
+    for a in ordered:
         run_all_code += f'    "{a["slug"]}",\n'
     run_all_code += ''']
 

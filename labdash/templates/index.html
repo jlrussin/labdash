@@ -190,6 +190,12 @@ body {
     color: #4a2d6e;
     font-family: monospace;
 }
+.badge-pipeline {
+    background: #eef2f7;
+    color: #425a70;
+    font-family: monospace;
+    letter-spacing: 0.04em;
+}
 
 .card-description {
     padding: 0.8rem 1.2rem;
@@ -735,6 +741,7 @@ body {
             <span class="card-count" id="cardCount">{{ total_count }} analyses</span>
             <button class="filter-btn" onclick="collapseAll()">Collapse All</button>
             <button class="filter-btn" onclick="expandAll()">Expand All</button>
+            <button class="btn-run-all" id="runAllStaleBtn" onclick="runAllStale()" style="display:none;">Run All Stale</button>
             <button class="btn-run-all" id="runAllBtn" onclick="runAll()" style="display:none;">Run All</button>
         </div>
     </div>
@@ -758,6 +765,7 @@ body {
         <div class="card-header" onclick="toggleCard(this)">
             <span class="card-title"><span class="card-collapse-icon">&#9660;</span>{{ card.title }}</span>
             <div class="card-badges">
+                {% if card.is_pipeline %}<span class="badge badge-pipeline" title="Pipeline node (transform)">pipeline</span>{% endif %}
                 {% if card.figure_id %}<span class="badge badge-figure-id">{{ card.figure_id }}</span>{% endif %}
                 {% if card.stale %}<span class="badge badge-stale">stale</span>{% endif %}
                 <span class="badge badge-{{ card.status }} status-badge" data-slug="{{ card.slug }}" onclick="event.stopPropagation(); cycleStatus(this)" title="Click to change status">{{ card.status }}</span>
@@ -777,7 +785,7 @@ body {
                 </div>
             {% elif card.output_table_html %}
                 <div class="card-output-table-wrapper">{{ card.output_table_html }}</div>
-            {% else %}
+            {% elif not card.is_pipeline %}
                 <div class="no-output">No output yet — run this analysis first</div>
             {% endif %}
         </div>
@@ -1787,6 +1795,29 @@ function toggleCodeExpand(btn) {
     btn.textContent = btn.textContent === 'Expand' ? 'Collapse' : 'Expand';
 }
 
+/* ── Helpers: update one card from a slug payload ─────── */
+function applyRunPayload(slug, data) {
+    const card = document.getElementById('card-' + slug);
+    if (!card) return;
+    const outputDiv = card.querySelector('.card-output');
+    const errorEl = card.querySelector('.error-display');
+    if (data.success) {
+        if (errorEl) errorEl.style.display = 'none';
+        if (data.image && outputDiv) {
+            outputDiv.innerHTML = '<img src="' + data.image + '" alt="' + slug + '">';
+        } else if (data.table_html && outputDiv) {
+            outputDiv.innerHTML = '<div class="card-output-table-wrapper">' + data.table_html + '</div>';
+        }
+        const staleBadge = card.querySelector('.badge-stale');
+        if (staleBadge) staleBadge.remove();
+    } else {
+        if (errorEl) {
+            errorEl.textContent = data.stderr || 'Unknown error';
+            errorEl.style.display = 'block';
+        }
+    }
+}
+
 /* ── Run All ─────────────────────────────────────────── */
 async function runAll() {
     const btn = document.getElementById('runAllBtn');
@@ -1805,23 +1836,12 @@ async function runAll() {
         try {
             const resp = await fetch('/api/run/' + slug, { method: 'POST' });
             const data = await resp.json();
-            if (data.success) {
-                const outputDiv = card.querySelector('.card-output');
-                const errorEl = card.querySelector('.error-display');
-                errorEl.style.display = 'none';
-                if (data.image) {
-                    outputDiv.innerHTML = '<img src="' + data.image + '" alt="' + slug + '">';
-                } else if (data.table_html) {
-                    outputDiv.innerHTML = '<div class="card-output-table-wrapper">' + data.table_html + '</div>';
-                }
-                const staleBadge = card.querySelector('.badge-stale');
-                if (staleBadge) staleBadge.remove();
-            } else {
-                failed++;
-                const errorEl = card.querySelector('.error-display');
-                errorEl.textContent = data.stderr || 'Unknown error';
-                errorEl.style.display = 'block';
+            // Refresh any upstream cards that were run as part of the chain.
+            if (data.upstream && Array.isArray(data.upstream)) {
+                for (const up of data.upstream) applyRunPayload(up.slug, up);
             }
+            applyRunPayload(slug, data);
+            if (!data.success) failed++;
         } catch(e) {
             failed++;
         }
@@ -1830,6 +1850,27 @@ async function runAll() {
     btn.textContent = failed ? (total - failed) + '/' + total + ' OK' : 'All Done!';
     btn.disabled = false;
     setTimeout(() => { btn.textContent = 'Run All'; }, 3000);
+}
+
+/* ── Run All Stale ───────────────────────────────────── */
+async function runAllStale() {
+    const btn = document.getElementById('runAllStaleBtn');
+    btn.disabled = true;
+    btn.textContent = 'Running…';
+    try {
+        const resp = await fetch('/api/run-all-stale', { method: 'POST' });
+        const data = await resp.json();
+        const ran = data.ran || [];
+        for (const r of ran) applyRunPayload(r.slug, r);
+        const failed = ran.filter(r => !r.success).length;
+        btn.textContent = failed
+            ? (ran.length - failed) + '/' + ran.length + ' OK'
+            : (ran.length === 0 ? 'Nothing stale' : 'All Done!');
+    } catch(e) {
+        btn.textContent = 'Error';
+    }
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = 'Run All Stale'; }, 3000);
 }
 
 /* ── Live mode detection ───────────────────────────────── */

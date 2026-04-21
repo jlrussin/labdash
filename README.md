@@ -13,12 +13,14 @@ A modular analysis and visualization dashboard for scientific research, designed
 - [meta.yaml Format](#metayaml-format)
 - [Aesthetic Variables Convention](#aesthetic-variables-convention)
 - [Collections](#collections)
+- [Pipelines and Transforms](#pipelines-and-transforms)
+- [Shared Plots (`_lib/plots/`)](#shared-plots-_libplots)
 - [CLI Commands](#cli-commands)
 - [Viewer Features](#viewer-features)
 - [Shared Code (\_lib/)](#shared-code-_lib)
 - [Agent Interaction Model](#agent-interaction-model)
 - [Agent Notes and Change Log](#agent-notes-and-change-log)
-- [Data Source Filtering](#data-source-filtering)
+- [Data Source Configuration](#data-source-configuration)
 - [Publication Pipeline](#publication-pipeline)
 - [Safety](#safety)
 - [Contributing](#contributing)
@@ -57,11 +59,18 @@ The dashboard viewer assembles all analyses into a browsable HTML interface with
 pip install -e .
 labdash init my-project
 cd my-project
+mkdir -p data && echo '{"trials":[{"value":0.5},{"value":1.2}]}' > data/p1.json
 labdash build
-open _output/index.html
+open _output/my-project/index.html
 ```
 
-This creates a project with an example analysis, builds it, and opens the static dashboard in your browser. From there you can add your own analyses by creating new directories under `analyses/`.
+This creates a project with:
+- a `collection.yaml` (configure `data_dir`, `title`, etc.);
+- a shared `_lib/` with `data_loading.py`, `style.py`, `pipeline.py`, and a `plots/` directory for reusable plot functions;
+- an `example_pipeline/` transform that produces a pickled DataFrame artifact;
+- an `example_analysis/` leaf that loads that artifact and plots it.
+
+Add your own analyses under the project directory, or use `labdash new-wrapper` to scaffold a leaf that wraps a shared plot function.
 
 ---
 
@@ -183,10 +192,10 @@ dependencies: []                       # List of slugs that must run first
 | `methodology` | no | Longer explanation in a collapsible section. |
 | `tags` | no | List of strings for filtering. |
 | `status` | no | One of `draft`, `active`, `publication`, or `disabled`. Disabled analyses are skipped entirely. Default: `draft`. |
-| `output_format` | no | Expected output type: `png`, `svg`, or `table`. Default: `png`. |
+| `output_format` | no | Expected output type: `png`, `svg`, `table`, or `pipeline`. Default: `png`. `pipeline` marks a transform node (no figure required — see [Pipelines and Transforms](#pipelines-and-transforms)). |
 | `figure_id` | no | Used as the filename when exporting figures for publication. |
 | `caption` | no | Figure caption included in the export manifest. |
-| `dependencies` | no | List of analysis slugs that must run before this one. |
+| `dependencies` | no | List of analysis slugs that must run before this one. Staleness propagates transitively through these. |
 
 ---
 
@@ -236,31 +245,127 @@ SHARE_Y_AXIS = True          # Useful for side-by-side RT comparisons
 
 ## Collections
 
-A project can organize analyses into multiple **collections** -- separate sets of analyses that share the same `_lib/` code. This is useful when a project has distinct experiment phases or analysis themes.
+A project can organize analyses into multiple **collections** -- separate sets of analyses that share the same `_lib/` code. Each collection is self-contained: it has its own `collection.yaml` (defining data source, title, etc.), its own pipeline nodes, its own leaf analyses, and its own output subtree.
 
 ```
 my-project/
-  labdash.yaml              # points to active collection
-  data/
-  analyses/
-    _lib/                   # shared across all collections
+  analysis/
+    _lib/                              # shared across all collections
       data_loading.py
+      preprocessing.py
       style.py
-    pilot1/                 # one collection
-      accuracy_by_condition/
-      rt_by_distance/
-    pilot2/                 # another collection
-      accuracy_by_condition/
-      learning_curves/
+      pipeline.py                      # upstream() artifact helper
+      plots/                           # shared plot functions
+        sde_accuracy.py
+        rt_distributions.py
+    pilot1_test/
+      collection.yaml                  # data_dir, data_filter, title
+      build_trials_df/                 # pipeline node
+      compute_exclusions/              # pipeline node
+      apply_exclusions/                # pipeline node
+      sde_accuracy/                    # leaf wrapper (dependencies: [apply_exclusions])
+    headless_sim/
+      collection.yaml                  # different data_dir
+      build_trials_df/
+      sde_accuracy/                    # leaf wrapper (dependencies: [build_trials_df])
 ```
 
-In `labdash.yaml`, set `analyses_dir` to the active collection:
+Build or serve a specific collection with `-c`:
 
-```yaml
-analyses_dir: "analyses/pilot1"    # switch to "analyses/pilot2" to view that set
+```bash
+labdash build -c analysis/pilot1_test
+labdash serve -c analysis/headless_sim --port 8801
 ```
+
+When `collection.yaml` exists in the analyses directory, the output dir defaults to `_output/<collection_name>/` automatically, so same-named slugs in different collections don't collide.
 
 The `_lib/` directory is resolved by walking up from the collection directory, so shared code is automatically available to all collections.
+
+---
+
+## Pipelines and Transforms
+
+LabDash treats the `dependencies:` field in each `meta.yaml` as a DAG. Analyses are topologically sorted for execution, and **staleness propagates transitively** — touching an upstream source marks every downstream analysis as stale.
+
+### Pipeline node type (`output_format: pipeline`)
+
+Transforms that produce a derived artifact (a filtered DataFrame, an exclusion list, etc.) but don't need to emit a figure should set `output_format: pipeline`. Such analyses:
+
+- write their artifacts (`trials.pkl`, `exclusions.json`, etc.) into their output dir;
+- get a "pipeline" badge in the dashboard, with no "No output yet" placeholder;
+- may *optionally* also emit an `output.png` — for example, a `compute_exclusions` node can bundle a histogram of who was excluded and why.
+
+### `_lib.pipeline` artifact helper
+
+A downstream leaf can read upstream artifacts with no path plumbing:
+
+```python
+from _lib.pipeline import load_pickle, load_json
+
+def run(output_dir):
+    df = load_pickle("apply_exclusions", "trials.pkl")       # pandas DataFrame
+    excluded = load_json("compute_exclusions", "exclusions.json")
+    ...
+```
+
+The helper resolves the current collection's output root from LabDash's runtime context; no hard-coded paths in the analysis script.
+
+### Transitive staleness
+
+`labdash build <leaf_slug>` (or clicking **Run** on a card) always runs any transitively-stale upstream first, then the target:
+
+```
+Running build_trials_df...   (upstream) OK (0.6s)
+Running apply_exclusions...  (upstream) OK (0.1s)
+Running sde_accuracy... OK (1.2s)
+```
+
+`labdash build --only-stale` reruns only the stale analyses across the whole DAG. **Run All Stale** in the viewer does the same.
+
+---
+
+## Shared Plots (`_lib/plots/`)
+
+When the same plot applies to multiple collections (e.g., running the exact same analyses on human data and on agent-generated simulation data), factor the plotting logic into a pure function in `_lib/plots/`:
+
+```python
+# _lib/plots/sde_accuracy.py
+def make(df, output_dir, *, figsize=(14, 5), title="SDE", ylim=None, ...) -> dict:
+    ...  # plot logic; returns stats dict
+```
+
+Each collection then has a thin wrapper:
+
+```python
+# analysis/pilot1_test/sde_accuracy/analysis.py
+from _lib.pipeline import load_pickle
+from _lib.plots.sde_accuracy import make
+from _lib.style import apply_style
+
+FIGSIZE = (14, 5); TITLE = "Pilot 1 — SDE"; YLIM = (0, 1.05)
+UPSTREAM = "apply_exclusions"
+
+def run(output_dir):
+    apply_style()
+    df = load_pickle(UPSTREAM, "trials.pkl")
+    return make(df, output_dir, figsize=FIGSIZE, title=TITLE, ylim=YLIM)
+```
+
+Properties:
+- **One source of truth** for each plot's logic.
+- **Per-collection aesthetics** — FIGSIZE, TITLE, YLIM etc. stay at the top of each wrapper, so a scientist can tweak them in one collection without affecting others.
+- **Per-collection dependencies** — each wrapper's `meta.yaml` declares its own `dependencies:`, so pilot1 can depend on `apply_exclusions` while `headless_sim`'s wrapper depends on `build_trials_df` directly (no exclusions).
+
+Scaffold a wrapper with `labdash new-wrapper`:
+
+```bash
+labdash new-wrapper sde_accuracy \
+    -c analysis/headless_sim \
+    --plot _lib.plots.sde_accuracy \
+    --upstream build_trials_df \
+    --title "Headless Sim — SDE" \
+    --group Strategy
+```
 
 ---
 
@@ -333,7 +438,30 @@ labdash init my-project    # create in ./my-project
 labdash init               # create in current directory
 ```
 
-Creates: `labdash.yaml`, `analyses/_lib/` (with `data_loading.py`, `style.py`, `preprocessing.py`), and an example analysis.
+Creates: `collection.yaml`, `_lib/` (with `data_loading.py`, `style.py`, `preprocessing.py`, `pipeline.py`, `plots/`), an example pipeline node, and an example leaf analysis.
+
+### `labdash new-wrapper <slug> -c <collection> --plot <module>`
+
+Scaffold a leaf wrapper that calls a shared plot function in `_lib/plots/`.
+
+```bash
+labdash new-wrapper sde_accuracy \
+    -c analysis/headless_sim \
+    --plot _lib.plots.sde_accuracy \
+    --upstream build_trials_df \
+    --title "Headless Sim — SDE" \
+    --group Strategy
+```
+
+Options:
+- `--upstream <slug>` — pipeline node whose artifact is loaded as the input DataFrame.
+- `--upstream-file <name>` — filename inside the upstream's output dir (default `trials.parquet`).
+- `--deps slug1,slug2` — explicit `dependencies:` list for `meta.yaml` (defaults to `[<upstream>]` if `--upstream` is given).
+- `--title <str>`, `--group <str>` — metadata for the generated `meta.yaml`.
+
+### `labdash build --only-stale`
+
+Skip analyses whose outputs are up-to-date. Stale means either the source is newer than any output, or any upstream dependency is itself stale. Combine with specific slugs to rebuild only those and their stale ancestors.
 
 ---
 
@@ -447,21 +575,22 @@ Auto-generated by `labdash build`. Contains a snapshot of all current groups and
 
 ---
 
-## Data Source Filtering
+## Data Source Configuration
 
-The `data_filter` field in `labdash.yaml` controls which data subset the dashboard is built from:
+Each collection's data source is configured in its own `collection.yaml`:
 
 ```yaml
-data_filter: "test"    # all | prod | test
+title: "My Collection"
+data_dir: "data"        # path to participant data (relative to project root, or absolute)
+data_filter: "all"      # optional: all | prod | test (interpretation is up to data_loading.py)
 ```
 
-- **`all`** -- use all available data.
-- **`prod`** -- production data only (e.g., real participants).
-- **`test`** -- test/pilot data only.
+- `data_dir` — path to the directory containing participant JSON (or CSV, etc.) files. The data loader in `_lib/data_loading.py` resolves this.
+- `data_filter` — an optional string your loader interprets however it wants: `all` / `prod` / `test` is a common convention when one directory contains a mix.
 
-The current filter is displayed as a colored badge in the dashboard sidebar (`test` = yellow, `prod` = green, `all` = blue). This makes it immediately visible which data you are looking at, preventing accidental mixing of test and production data during analysis.
+LabDash sets a runtime context (`labdash._context.CURRENT_COLLECTION_CONFIG`) before each analysis runs, so `_lib/data_loading.py` can read these values without knowing which collection invoked it. When a script is run standalone (`python analysis.py`), the loader falls back to walking up from `__file__` to find `collection.yaml`.
 
-Your `_lib/data_loading.py` should read this setting and filter accordingly.
+Because each collection has its own `data_dir`, the same shared plot code (`_lib/plots/*`) can run against multiple data sources simply by placing wrappers in each collection.
 
 ---
 

@@ -12,7 +12,13 @@ from pygments import highlight
 from pygments.lexers import PythonLexer
 from pygments.formatters import HtmlFormatter
 
-from .runner import discover_analyses, ordered_analyses, load_registry, _is_new_format_registry
+from .runner import (
+    discover_analyses,
+    ordered_analyses,
+    load_registry,
+    _is_new_format_registry,
+    is_stale,
+)
 
 
 def _read_file(path: Path) -> str | None:
@@ -41,18 +47,18 @@ def _highlight_python(code: str) -> str:
     return highlight(code, PythonLexer(), HtmlFormatter(nowrap=True, style=PYGMENTS_STYLE))
 
 
-def _is_stale(analysis_path: Path, output_dir: Path, slug: str) -> bool:
-    """Check if output is older than analysis.py source."""
-    output_png = output_dir / slug / "output.png"
-    output_html = output_dir / slug / "output.html"
-    output = output_png if output_png.exists() else output_html
-    if not output.exists():
-        return True
-    return analysis_path.stat().st_mtime > output.stat().st_mtime
+def build_card_data(
+    analysis: dict,
+    output_dir: Path,
+    *,
+    by_slug: dict[str, dict] | None = None,
+    stale_memo: dict[str, bool] | None = None,
+) -> dict:
+    """Build template context for a single analysis card.
 
-
-def build_card_data(analysis: dict, output_dir: Path) -> dict:
-    """Build template context for a single analysis card."""
+    `by_slug` and `stale_memo` are threaded in so transitive staleness is
+    computed once per build (memoized across all cards).
+    """
     slug = analysis["slug"]
     meta = analysis["meta"]
     slug_output = output_dir / slug
@@ -79,18 +85,23 @@ def build_card_data(analysis: dict, output_dir: Path) -> dict:
     output_image = None
     output_table_html = None
     output_format = meta.get("output_format", "png")
+    is_pipeline = (output_format == "pipeline")
 
     if output_format == "table":
         table_path = slug_output / "output.html"
         output_table_html = _read_file(table_path)
     else:
-        for ext in [f".{output_format}", ".png", ".svg", ".jpg"]:
+        # For `pipeline`, an image is optional — check common extensions.
+        search_exts = [".png", ".svg", ".jpg"] if is_pipeline else [f".{output_format}", ".png", ".svg", ".jpg"]
+        for ext in search_exts:
             img_path = slug_output / f"output{ext}"
             if img_path.exists():
                 output_image = _image_to_data_uri(img_path)
                 break
 
-    stale = _is_stale(analysis["analysis_path"], output_dir, slug)
+    if by_slug is None:
+        by_slug = {}
+    stale = is_stale(slug, by_slug, output_dir, stale_memo)
 
     return {
         "slug": slug,
@@ -112,11 +123,17 @@ def build_card_data(analysis: dict, output_dir: Path) -> dict:
         "output_image": output_image,
         "output_table_html": output_table_html,
         "stale": stale,
+        "is_pipeline": is_pipeline,
+        "output_format": output_format,
     }
 
 
 def _build_lib_data(analyses_dir: Path) -> list[dict]:
-    """Discover and read _lib/ source files for display in sidebar."""
+    """Discover and read _lib/ source files for display in sidebar.
+
+    Includes both top-level _lib/*.py and _lib/plots/*.py (the shared
+    pure plot functions convention).
+    """
     lib_files = []
     # Walk up from analyses_dir to find _lib (collection layout)
     for d in [analyses_dir, analyses_dir.parent]:
@@ -130,6 +147,16 @@ def _build_lib_data(analyses_dir: Path) -> list[dict]:
                     "name": f.name,
                     "code_highlighted": _highlight_python(code),
                 })
+            plots_dir = lib_dir / "plots"
+            if plots_dir.is_dir():
+                for f in sorted(plots_dir.glob("*.py")):
+                    if f.name == "__init__.py":
+                        continue
+                    code = f.read_text()
+                    lib_files.append({
+                        "name": f"plots/{f.name}",
+                        "code_highlighted": _highlight_python(code),
+                    })
             break
     return lib_files
 
@@ -158,9 +185,12 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
     _sync_registry(analyses_dir)
 
     analyses = ordered_analyses(analyses_dir)
+    by_slug = {a["slug"]: a for a in analyses}
+    stale_memo: dict[str, bool] = {}
 
-    # Build card data for each analysis
-    cards = [build_card_data(a, output_dir) for a in analyses]
+    # Build card data for each analysis (memoized staleness)
+    cards = [build_card_data(a, output_dir, by_slug=by_slug, stale_memo=stale_memo)
+             for a in analyses]
 
     # Organize by group as an ordered list of {name, cards} dicts
     groups_ordered = []
