@@ -381,7 +381,7 @@ labdash build accuracy_by_condition    # run only this one
 labdash build sde_plot rt_histogram    # run specific analyses
 ```
 
-Output goes to the `output_dir` specified in `labdash.yaml` (default: `_output/`). The generated `_output/index.html` is a self-contained file you can open directly in a browser.
+Output goes to the `output_dir` specified in the active `collection.yaml` (default: `_output/<collection_name>/` when a `collection.yaml` is present). The generated `_output/<collection_name>/index.html` is a self-contained file you can open directly in a browser.
 
 ### `labdash serve [--port PORT]`
 

@@ -162,20 +162,11 @@ def _build_lib_data(analyses_dir: Path) -> list[dict]:
 
 
 def _load_project_config(analyses_dir: Path) -> dict:
-    """Load config: collection.yaml in analyses_dir, then labdash.yaml walking up."""
-    # Prefer collection-level config
+    """Load the collection's config from analyses_dir/collection.yaml."""
     collection_cfg = analyses_dir / "collection.yaml"
     if collection_cfg.exists():
         with open(collection_cfg) as f:
-            config = yaml.safe_load(f) or {}
-        return config
-
-    # Fall back to labdash.yaml
-    for d in [analyses_dir, analyses_dir.parent, analyses_dir.parent.parent]:
-        cfg = d / "labdash.yaml"
-        if cfg.exists():
-            with open(cfg) as f:
-                return yaml.safe_load(f) or {}
+            return yaml.safe_load(f) or {}
     return {}
 
 

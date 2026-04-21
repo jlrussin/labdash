@@ -87,37 +87,40 @@ if __name__ == "__main__":
 ## 2. File Structure
 
 ```
-analysis/                            # Top-level analysis directory
-├── _lib/                            # Shared code across all collections
-│   ├── __init__.py
-│   ├── data_loading.py              # Data loading functions
-│   ├── preprocessing.py             # Common transforms
-│   └── style.py                     # Colors, fonts, apply_style()
-├── my_collection/                   # A "collection" — one set of analyses
-│   ├── my_analysis/                 # One directory per analysis
-│   │   ├── analysis.py              # The code
-│   │   ├── meta.yaml                # Metadata (title, group, description, etc.)
-│   │   └── notes.md                 # Scientist's annotations (NEVER EDIT)
-│   ├── another_analysis/
-│   │   └── ...
-├── simulation/                      # Another collection (future)
+analysis/
+├── _lib/                             # Shared across all collections
+│   ├── data_loading.py               # Reads data_dir/data_filter from active collection.yaml
+│   ├── preprocessing.py              # Common transforms
+│   ├── style.py                      # Colors, fonts, apply_style()
+│   ├── pipeline.py                   # upstream()/load_pickle()/load_json() artifact helper
+│   └── plots/                        # Shared plot functions: make(df, output_dir, **kwargs)
+├── my_collection/                    # Self-contained: own data source + pipeline + leaves
+│   ├── collection.yaml               # data_dir, data_filter, title
+│   ├── registry.yaml                 # auto-synced: group order + tags
+│   ├── build_trials_df/              # Pipeline node (output_format: pipeline)
+│   └── my_analysis/                  # Leaf analysis
+│       ├── analysis.py
+│       ├── meta.yaml
+│       └── notes.md                  # Scientist's annotations (NEVER EDIT)
+├── another_collection/               # Another collection — different data source
 │   └── ...
-_output/                             # Generated (gitignored)
-├── index.html                       # Static dashboard for active collection
-├── my_analysis/
-│   ├── output.png                   # Generated figure
-│   └── stats.json                   # Generated statistics
-labdash.yaml                         # Project config (analyses_dir points to active collection)
+_output/                              # Generated (gitignored)
+├── my_collection/                    # Per-collection subtree (no cross-collection collisions)
+│   ├── index.html
+│   ├── build_trials_df/
+│   │   └── trials.pkl                # Artifact for downstream leaves to load
+│   └── my_analysis/
+│       ├── output.png
+│       └── stats.json
 ```
 
-**Collections**: A collection is a subdirectory of `analysis/` containing a coherent set of analyses. The `_lib/` directory is shared across all collections. `labdash.yaml` points `analyses_dir` to the active collection (e.g., `analysis/my_collection`). Switch collections by changing this path.
+**Collections.** Each collection is self-contained: it owns its `collection.yaml` (data source + title), its pipeline nodes, its leaf analyses, and its own `_output/<collection>/` subtree. No project-level `labdash.yaml` — data source config lives per-collection. Switch collections with `-c <collection_dir>` on any CLI command.
 
 ## 3. The meta.yaml Format
 
 ```yaml
 title: "Human-readable title"
-group: "Group Name"              # Used for sidebar grouping in viewer
-order: 1                         # Display order within group
+group: "Group Name"              # Default group for new analyses (registry is source of truth)
 description: >                   # Short description shown on card (1-2 sentences)
   What this analysis shows and why we care.
 methodology: >                   # Detailed description (expandable in viewer)
@@ -126,12 +129,14 @@ methodology: >                   # Detailed description (expandable in viewer)
   See methodology guidelines below.
 tags: [accuracy, distance, sde]  # For search and filtering
 status: draft                    # draft | active | publication
-output_format: png               # png | svg | pdf | table
-dependencies: []                 # Slugs of analyses that must run first
+output_format: png               # png | svg | table | pipeline
+dependencies: [upstream_slug]    # Slugs that must run first (staleness propagates transitively)
 # Publication metadata (fill in when status: publication)
 figure_id: ""                    # e.g., "Fig 2A"
 caption: ""                      # Publication caption
 ```
+
+**`output_format: pipeline`** marks a transform node that emits data artifacts (parquet/pickle/JSON) instead of figures. The card still appears in the dashboard — it shows description/methodology/code/stats/tags plus a "pipeline" badge — but the "No output yet" placeholder is suppressed. A pipeline node may ALSO emit `output.png` (e.g., a histogram of what was excluded) and the viewer will display it.
 
 ### Status values:
 - **draft** — exploration, may be incomplete or broken
@@ -183,27 +188,77 @@ Then verify the output image looks correct by reading it.
 ### ALWAYS update meta.yaml when changing what an analysis does
 If you change what a script computes or visualizes, update the `description` and `methodology` fields to match.
 
+## 4.5 Pipelines, artifact helper, and transitive staleness
+
+Analyses form a DAG via `dependencies:` in `meta.yaml`. Staleness propagates transitively — touching any upstream source marks all downstream analyses as stale. Clicking **Run** on a leaf (or invoking `labdash build <leaf>`) auto-includes transitively-stale upstream in topo order; there are no warnings, a Run always means run.
+
+**Pipeline nodes** (`output_format: pipeline`) are transforms whose job is to emit derived artifacts (pickled DataFrames, exclusion JSON lists, etc.) rather than figures. They're cards in the dashboard (with a "pipeline" badge) but don't require an image. They can still emit `output.png` if useful.
+
+**Downstream analyses read upstream artifacts** via `_lib/pipeline.py`:
+
+```python
+from _lib.pipeline import load_pickle, load_json
+
+def run(output_dir):
+    df = load_pickle("apply_exclusions", "trials.pkl")
+    excluded = load_json("compute_exclusions", "exclusions.json")
+```
+
+The helper resolves the current collection's output root from runtime context (`labdash._context.CURRENT_OUTPUT_ROOT`). No hard-coded paths in analysis scripts.
+
+## 4.6 Shared plot functions (`_lib/plots/`)
+
+When the same plot applies to multiple collections (e.g., running identical analyses on real human data vs. agent-generated sim data), factor the logic into a pure function in `_lib/plots/`:
+
+```python
+# _lib/plots/sde_accuracy.py
+def make(df, output_dir, *, figsize=(14, 5), title="SDE", ylim=None, ...) -> dict:
+    ...  # plot logic; returns stats dict
+```
+
+Each collection's leaf `analysis.py` becomes a ~15-line wrapper setting its own aesthetic constants and declaring its own `dependencies:`:
+
+```python
+from _lib.pipeline import load_pickle
+from _lib.plots.sde_accuracy import make
+from _lib.style import apply_style
+
+FIGSIZE = (14, 5); TITLE = "Pilot 1 — SDE"; YLIM = (0, 1.05)
+UPSTREAM = "apply_exclusions"   # per-collection; different collections may depend on different pipelines
+
+def run(output_dir):
+    apply_style()
+    df = load_pickle(UPSTREAM, "trials.pkl")
+    return make(df, output_dir, figsize=FIGSIZE, title=TITLE, ylim=YLIM)
+```
+
+Agent rule: if a knob isn't exposed in the shared `make()`, add it as a kwarg (with the current behavior as default) and pass it in from the wrapper. Don't fork the shared function.
+
 ## 5. CLI Commands
 
 ```bash
-# Build (run analyses + generate static HTML dashboard)
-labdash build                        # run all analyses in default collection
-labdash build slug1 slug2            # run specific analyses only
-labdash build -c path/to/collection  # build a specific collection
+# Build (force-rebuild everything in topo order)
+labdash build -c path/to/collection
+
+# Build only stale (skip fresh outputs; stale chains still run in order)
+labdash build -c path/to/collection --only-stale
+
+# Build one slug plus any transitively-stale upstream (behavior change from pre-DAG)
+labdash build -c path/to/collection my_slug
 
 # Serve (live development server with in-browser editing)
-labdash serve                        # starts on localhost:8800
-labdash serve --port 9000            # custom port
-labdash serve -c path/to/collection  # serve a specific collection
+labdash serve -c path/to/collection               # localhost:8800 by default
+labdash serve -c path/to/other_collection --port 8801   # parallel viewers
 
 # Export (publication-ready output)
-labdash export figures               # SVG figures for publication
-labdash export figures --format pdf  # PDF format
-labdash export figures --status active  # export non-publication analyses
-labdash export code                  # self-contained code directory
+labdash export figures -c path/to/collection      # SVG by default
+labdash export figures --format pdf
+labdash export code -c path/to/collection         # self-contained code dir
 
-# Initialize (scaffold new project)
-labdash init /path/to/project        # create directory structure
+# Scaffold
+labdash init /path/to/project                     # new single-collection project
+labdash new-wrapper <slug> -c path/to/collection --plot _lib.plots.<module> \
+    [--upstream <pipeline_slug>] [--title ...] [--group ...]
 ```
 
 ### Build vs. Serve
@@ -226,33 +281,29 @@ labdash serve -c analyses/simulation --port 8801
 
 ## 6. Creating a New Analysis
 
-Step-by-step workflow:
+For a leaf that wraps a shared `_lib/plots/<module>` function, prefer the scaffolder — it lays down the wrapper, meta.yaml, and notes.md with the right imports and dependencies:
 
-1. **Create the directory:**
-   ```bash
-   mkdir analyses/my_new_analysis
-   ```
+```bash
+labdash new-wrapper my_slug \
+    -c path/to/collection \
+    --plot _lib.plots.my_plot \
+    --upstream build_trials_df \
+    --title "My Analysis" \
+    --group "Some Group"
+```
 
-2. **Write `meta.yaml`** with title, group, description, methodology, tags, status.
+For a bespoke leaf (or a new pipeline node):
 
-3. **Write `analysis.py`** following the contract. Import from `_lib/`. Aesthetic variables at top.
-
-4. **Create `notes.md`** with the placeholder comment:
+1. **Create the directory** under the collection: `mkdir path/to/collection/my_slug`.
+2. **Write `meta.yaml`** with title, group, description, methodology, tags, status, and `dependencies:` listing any upstream slugs.
+3. **Write `analysis.py`** following the contract. Import from `_lib/`. Aesthetic variables at top. Load upstream artifacts via `_lib.pipeline.load_pickle()` / `load_json()`.
+4. **Create `notes.md`**:
    ```markdown
    <!-- Your notes here. This file is never edited by AI agents. -->
    ```
-
-5. **Run the script** to verify it works:
-   ```bash
-   python analyses/my_new_analysis/analysis.py
-   ```
-
-6. **Read the output image** to verify it looks correct.
-
-7. **Build the dashboard** to see it in context:
-   ```bash
-   labdash build my_new_analysis
-   ```
+5. **Run the script** to verify: `python path/to/collection/my_slug/analysis.py` (works standalone; data_loading walks up from cwd to find the collection.yaml).
+6. **Read the output image** to verify it looks right.
+7. **Build the dashboard** to see it in context: `labdash build -c path/to/collection my_slug` (auto-includes transitively-stale upstream).
 
 ## 7. Table Output
 
@@ -302,18 +353,45 @@ def run(output_dir: Path) -> dict:
 
 ## 9. Handling Dependencies
 
-If analysis B needs statistics computed by analysis A:
+`dependencies:` in `meta.yaml` forms a DAG. The runner topo-sorts execution, and **staleness propagates transitively** — touching any upstream source marks all downstream analyses as stale in the viewer.
 
-1. A's `meta.yaml`: no special config needed
-2. B's `meta.yaml`: add `dependencies: [a_slug]`
-3. A's `run()` returns the stats dict (saved automatically as `stats.json`)
-4. B's `run()` loads them:
+### Passing scalar stats (simple case)
+
+If B needs summary stats from A:
+
+1. A returns a stats dict from `run()` (auto-saved as `stats.json`).
+2. B's meta.yaml: `dependencies: [a_slug]`.
+3. B's `run()` reads A's stats via the pipeline helper:
    ```python
-   with open(Path(__file__).parent.parent / "a_slug" / "stats.json") as f:
-       a_stats = json.load(f)
+   from _lib.pipeline import load_json
+   a_stats = load_json("a_slug", "stats.json")
    ```
 
-The runner topologically sorts analyses to respect dependencies.
+### Passing DataFrames / arbitrary artifacts (pipeline case)
+
+For derived DataFrames, exclusion lists, or anything bigger than scalars, make A a pipeline node (`output_format: pipeline`) and have it write its artifact:
+
+```python
+# A/analysis.py (pipeline node)
+def run(output_dir):
+    df = ...              # compute / transform
+    df.to_pickle(output_dir / "trials.pkl")
+    return {"n_rows": len(df)}
+```
+
+B's `run()` loads it with the helper:
+
+```python
+from _lib.pipeline import load_pickle
+
+def run(output_dir):
+    df = load_pickle("a_slug", "trials.pkl")
+    ...
+```
+
+### Hard "Run = run stale chain"
+
+`labdash build <slug>` and the viewer's per-card **Run** button always run any transitively-stale upstream first, in topo order, then the target. No warnings — a Run always means run. Use `--only-stale` (CLI) or the **Run All Stale** button (viewer) to skip fresh work across the whole DAG.
 
 ## 10. Tag Discipline
 
@@ -364,31 +442,43 @@ The collection-level `change_log.md` is an **append-only log** of edits the user
 
 ## 13. Registry (`registry.yaml`)
 
-Auto-generated file listing all groups and tags in the collection. Updated on every `labdash build` and every metadata edit via the server.
-
-**Purpose:** Agents should read this before creating new analyses to see what groups and tags already exist, and choose from them rather than inventing new ones.
+The registry is the **source of truth for group ordering** and within-group analysis ordering. It is synced (not rebuilt) on every `labdash build` and metadata edit — existing order is never changed by sync, only new analyses are added and deleted ones removed.
 
 ```yaml
+agent_notes: |
+  Groups ordered by data pipeline stage: Pipeline → Design → ...
+  Within each group, order by conceptual flow (overview → detail).
+
 groups:
-  Performance:
-  - accuracy_by_phase
-  - rt_by_distance_combined
-  Symbolic Distance:
-  - sde_accuracy
-  - sde_rt
+  - name: Pipeline
+    analyses:
+      - build_trials_df
+      - apply_exclusions
+  - name: Performance
+    analyses:
+      - accuracy_by_phase
+      - rt_by_distance_combined
+
 tags:
-- accuracy
-- arbitrage
-- icl
-- rt
-- training
+  - accuracy
+  - arbitrage
+  - icl
+  - pipeline
+  - rt
 ```
 
 **Rules:**
-- Read `registry.yaml` before assigning groups and tags to new analyses
-- Prefer existing groups and tags over creating new ones
-- Never edit manually — it's regenerated automatically
+- Read `registry.yaml` before assigning groups and tags to new analyses.
+- Prefer existing groups and tags over creating new ones.
+- The `agent_notes` top-level string field is for high-level organizational principles; survives YAML round-trips.
+- When creating a new analysis, set `group:` in meta.yaml — on next build, sync appends it to the end of that group in the registry.
+- You may edit `registry.yaml` directly to change ordering or group membership; registry wins for existing analyses.
 
 ## 14. Staleness Detection
 
-`labdash build` compares `analysis.py` modification time against `output.png` modification time. Stale outputs (code newer than output) are flagged with a "stale" badge in the viewer. This helps the scientist know which results are current.
+`labdash build` computes staleness **transitively**:
+
+- An analysis is self-stale if its `analysis.py` mtime is newer than its oldest output file (or if it has no outputs).
+- An analysis is dep-stale if any upstream dependency's newest output is newer than this one's oldest output, or if any upstream is itself stale.
+
+Stale analyses are flagged with a red "stale" badge in the viewer. The **Run All Stale** button reruns only them, in topo order. Clicking **Run** on a single card runs any transitively-stale upstream before the target.
