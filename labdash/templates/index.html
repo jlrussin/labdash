@@ -661,6 +661,248 @@ body {
     outline: none;
 }
 
+/* ── Sidebar tree (shared code) ───────────────────────── */
+.sidebar-tree { list-style: none; margin: 0; padding: 0; }
+.sidebar-tree details { margin: 0.1rem 0; }
+.sidebar-tree summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.78rem;
+    color: #7f8c8d;
+    border-radius: 3px;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.sidebar-tree summary::-webkit-details-marker { display: none; }
+.sidebar-tree summary:hover { background: #f0f0f0; }
+.sidebar-tree summary::before {
+    content: '▸';
+    font-size: 0.6rem;
+    color: #bbb;
+    transition: transform 0.15s;
+    display: inline-block;
+    width: 0.7rem;
+}
+.sidebar-tree details[open] > summary::before { transform: rotate(90deg); }
+.sidebar-tree .tree-label { flex: 1; min-width: 0; }
+.sidebar-tree .tree-count {
+    font-size: 0.68rem;
+    color: #aab;
+    font-variant-numeric: tabular-nums;
+}
+.sidebar-tree .tree-body { padding-left: 1.1rem; }
+.sidebar-tree .tree-file {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.77rem;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    color: #555;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: background 0.12s, color 0.12s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sidebar-tree .tree-file:hover { background: #eef3f7; color: #2c3e50; }
+.sidebar-tree .tree-file.active {
+    background: #d3e4f5;
+    color: #1a6199;
+    font-weight: 600;
+    box-shadow: inset 3px 0 0 #3498db;
+}
+.sidebar-tree .tree-file.dim { color: #a0a8b0; }
+
+/* Sidebar splitter (resizable boundary) */
+.splitter {
+    width: 4px;
+    cursor: col-resize;
+    background: transparent;
+    border-right: 1px solid #e0e0e0;
+    transition: background 0.12s;
+    flex-shrink: 0;
+}
+.splitter:hover, .splitter.dragging { background: #dfeaf4; }
+body.splitter-dragging {
+    cursor: col-resize !important;
+    user-select: none;
+}
+body.splitter-dragging * { user-select: none !important; }
+
+/* ── Lineage breadcrumb strip ─────────────────────────── */
+.lineage {
+    padding: 0.5rem 1.2rem 0.6rem;
+    border-top: 1px solid #f7f7fa;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.76rem;
+    line-height: 1.2;
+    color: #8a93a6;
+    overflow: hidden;
+    position: relative;
+}
+.lineage-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #aab4c4;
+    flex-shrink: 0;
+    font-weight: 600;
+}
+.lineage-track {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+    flex: 1;
+    min-width: 0;
+    padding: 0.15rem 0.05rem;
+    mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+}
+.lineage-track::-webkit-scrollbar { display: none; }
+.lineage-segment {
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 0.77rem;
+    color: #8a93a6;
+    background: none;
+    border: none;
+    padding: 0.18rem 0.3rem;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    max-width: 22ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color 0.12s, max-width 0.25s, background 0.12s, opacity 0.15s;
+    opacity: 0.82;
+    flex-shrink: 0;
+}
+.lineage-segment:hover {
+    color: #3498db;
+    opacity: 1;
+    max-width: 40ch;
+    background: #f4f8fb;
+}
+.lineage-segment.is-pipeline::before {
+    content: '◆';
+    color: #b8c1d1;
+    margin-right: 0.3rem;
+    font-size: 0.7rem;
+    vertical-align: 2%;
+}
+.lineage-segment.is-current {
+    color: #2c3e50;
+    background: rgba(52, 152, 219, 0.08);
+    font-weight: 600;
+    cursor: default;
+    opacity: 1;
+}
+.lineage-segment.is-current:hover { background: rgba(52, 152, 219, 0.08); color: #2c3e50; }
+.lineage-sep {
+    font-family: "SF Mono", "Fira Code", monospace;
+    color: #cbd2dc;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+    pointer-events: none;
+}
+.card-flash { animation: cardFlash 0.6s ease-out; }
+@keyframes cardFlash {
+    0%   { box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.55); }
+    100% { box-shadow: 0 0 0 0 rgba(52, 152, 219, 0); }
+}
+
+/* ── Tabbed code panel ────────────────────────────────── */
+.code-tabs {
+    display: flex;
+    gap: 0.1rem;
+    border-bottom: 1px solid #e5e8ed;
+    margin-bottom: 0.6rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+}
+.code-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.78rem;
+    font-family: "SF Mono", "Fira Code", monospace;
+    color: #8a93a6;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: 26ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.code-tab:hover { color: #2c3e50; }
+.code-tab.active {
+    color: #2c3e50;
+    border-bottom-color: #3498db;
+    font-weight: 600;
+}
+.code-tab.is-shared::before {
+    content: '◇';
+    color: #a4acb9;
+    font-size: 0.8rem;
+}
+.code-tab.active.is-shared::before { color: #3498db; }
+.code-tab-used-by {
+    font-size: 0.65rem;
+    color: #aab4c4;
+    font-weight: 400;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin-left: 0.25rem;
+}
+.code-pane { display: none; position: relative; }
+.code-pane.active { display: block; }
+.shared-pane-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.15rem 0.55rem;
+    font-size: 0.72rem;
+    color: #8a93a6;
+    flex-wrap: wrap;
+}
+.shared-pane-header .shared-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    letter-spacing: 0.03em;
+}
+.shared-pane-header .shared-tag .ro-dot {
+    width: 6px; height: 6px;
+    background: #d4a574;
+    border-radius: 50%;
+    display: inline-block;
+}
+.jump-to-sidebar-btn {
+    background: none;
+    border: 1px solid #dbe2ea;
+    color: #5a6475;
+    font-size: 0.72rem;
+    padding: 0.22rem 0.55rem;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.12s;
+    font-family: inherit;
+}
+.jump-to-sidebar-btn:hover {
+    border-color: #3498db;
+    color: #3498db;
+    background: #f4f8fb;
+}
+
 /* ── Pygments syntax highlighting ──────────────────────── */
 {{ pygments_css }}
 .highlight { background: transparent !important; }
@@ -710,21 +952,61 @@ body {
         <button class="filter-btn" onclick="resetCardOrder()" id="resetOrderBtn" style="display:none;">Reset order</button>
     </div>
 
-    {% if lib_files %}
+    {% if all_lib_entries %}
     <div class="sidebar-section">
         <h3>Shared Code</h3>
         <button class="filter-btn reload-data-btn" id="reloadDataBtn" onclick="reloadData()" style="display:none;width:100%;margin-bottom:0.5rem;">Reload Data</button>
-        {% for lf in lib_files %}
-        <div class="lib-file-item" onclick="openLibFile('{{ lf.name }}')">{{ lf.name }}</div>
-        {% endfor %}
+        <ul class="sidebar-tree" id="libTree">
+            <li>
+                <details open>
+                    <summary><span class="tree-label">_lib/</span></summary>
+                    <div class="tree-body">
+                        {% for lf in lib_data.lib_files %}
+                        <div class="tree-file" data-lib-name="{{ lf.name }}" onclick="openLibFile('{{ lf.name }}')" title="{{ lf.name }}">{{ lf.name }}</div>
+                        {% endfor %}
+                        {% if lib_data.plots_used or lib_data.plots_unused %}
+                        <details open>
+                            <summary>
+                                <span class="tree-label">plots/ · used here</span>
+                                <span class="tree-count">{{ lib_data.plots_used | length }}</span>
+                            </summary>
+                            <div class="tree-body">
+                                {% for lf in lib_data.plots_used %}
+                                <div class="tree-file" data-lib-name="{{ lf.name }}" onclick="openLibFile('{{ lf.name }}')" title="{{ lf.name }}{% if lf.used_by %} · used by: {{ lf.used_by | join(', ') }}{% endif %}">{{ lf.display }}</div>
+                                {% endfor %}
+                                {% if not lib_data.plots_used %}
+                                <div class="tree-file dim" style="font-style:italic;cursor:default;" onclick="event.stopPropagation();">(none)</div>
+                                {% endif %}
+                            </div>
+                        </details>
+                        <details>
+                            <summary>
+                                <span class="tree-label">plots/ · unused here</span>
+                                <span class="tree-count">{{ lib_data.plots_unused | length }}</span>
+                            </summary>
+                            <div class="tree-body">
+                                {% for lf in lib_data.plots_unused %}
+                                <div class="tree-file dim" data-lib-name="{{ lf.name }}" onclick="openLibFile('{{ lf.name }}')" title="{{ lf.name }} (not imported by any wrapper in this collection)">{{ lf.display }}</div>
+                                {% endfor %}
+                            </div>
+                        </details>
+                        {% endif %}
+                    </div>
+                </details>
+            </li>
+        </ul>
     </div>
     {% endif %}
 </nav>
+
+<!-- Resizable splitter between sidebar and main -->
+<div class="splitter" id="sidebarSplitter" aria-label="Resize sidebar" title="Drag to resize"></div>
 
 <!-- Shared code slide-out panel -->
 <div class="lib-code-panel" id="libCodePanel">
     <div class="lib-code-header">
         <span id="libCodeTitle"></span>
+        <div id="libCodeHeaderActions" style="display:flex;gap:0.4rem;align-items:center;"></div>
         <button class="lib-code-close" onclick="closeLibPanel()">&times;</button>
     </div>
     <div class="lib-code-body">
@@ -771,6 +1053,21 @@ body {
                 <span class="badge badge-{{ card.status }} status-badge" data-slug="{{ card.slug }}" onclick="event.stopPropagation(); cycleStatus(this)" title="Click to change status">{{ card.status }}</span>
             </div>
         </div>
+
+        {% if card.lineage and card.lineage | length > 1 %}
+        <div class="lineage" data-slug="{{ card.slug }}">
+            <span class="lineage-label">Pipeline</span>
+            <div class="lineage-track">
+                {% for seg in card.lineage %}
+                {% if not loop.first %}<span class="lineage-sep">›</span>{% endif %}
+                <button type="button"
+                        class="lineage-segment{% if seg.is_pipeline %} is-pipeline{% endif %}{% if seg.is_current %} is-current{% endif %}"
+                        title="{{ seg.slug }}"
+                        {% if not seg.is_current %}onclick="event.stopPropagation(); scrollToCard('{{ seg.slug }}')"{% else %}disabled{% endif %}>{{ seg.slug }}</button>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
 
         <div class="card-body">
         <div class="card-group-label" data-slug="{{ card.slug }}" onclick="event.stopPropagation(); openGroupDropdown(this)">{{ card.group }}</div>
@@ -830,16 +1127,43 @@ body {
         <!-- Code (expandable) -->
         <div class="expandable" id="code-{{ card.slug }}">
             <div class="expandable-header" onclick="toggleExpand(this)">
-                <span>Code</span>
+                <span>Code{% if card.shared_modules %} <span style="color:#aab4c4;font-weight:400;font-size:0.72rem;">· {{ 1 + (card.shared_modules | length) }} tabs</span>{% endif %}</span>
                 <span class="arrow">&#9654;</span>
             </div>
             <div class="expandable-body">
-                <div class="code-container">
-                    <button class="copy-btn" onclick="copyCode(this, '{{ card.slug }}')">Copy</button>
-                    <pre class="code-block"><code class="highlight" id="code-content-{{ card.slug }}">{{ card.code_highlighted }}</code></pre>
+                {% if card.shared_modules %}
+                <div class="code-tabs" data-slug="{{ card.slug }}">
+                    <button type="button" class="code-tab active" data-tab-kind="wrapper" onclick="event.stopPropagation(); switchCodeTab(this)">Analysis</button>
+                    {% for sm in card.shared_modules %}
+                    <button type="button" class="code-tab is-shared" data-tab-kind="shared" data-lib-name="{{ sm.name }}" onclick="event.stopPropagation(); switchCodeTab(this)" title="{{ sm.name }} · read-only · used by {{ sm.used_by_count }} analys{{ 'is' if sm.used_by_count == 1 else 'es' }}">
+                        {{ sm.display_name }}
+                        <span class="code-tab-used-by">· {{ sm.used_by_count }}</span>
+                    </button>
+                    {% endfor %}
                 </div>
-                <div class="editor-container" id="editor-{{ card.slug }}"></div>
-                <button class="img-action-btn code-expand-btn" onclick="event.stopPropagation(); toggleCodeExpand(this)">Expand</button>
+                {% endif %}
+
+                <div class="code-pane active" data-pane-kind="wrapper">
+                    <div class="code-container">
+                        <button class="copy-btn" onclick="copyCode(this, '{{ card.slug }}')">Copy</button>
+                        <pre class="code-block"><code class="highlight" id="code-content-{{ card.slug }}">{{ card.wrapper_code_highlighted }}</code></pre>
+                    </div>
+                    <div class="editor-container" id="editor-{{ card.slug }}"></div>
+                    <button class="img-action-btn code-expand-btn" onclick="event.stopPropagation(); toggleCodeExpand(this)">Expand</button>
+                </div>
+
+                {% for sm in card.shared_modules %}
+                <div class="code-pane" data-pane-kind="shared" data-lib-name="{{ sm.name }}">
+                    <div class="shared-pane-header">
+                        <span class="shared-tag"><span class="ro-dot"></span>Shared · read-only · used by {{ sm.used_by_count }} analys{{ 'is' if sm.used_by_count == 1 else 'es' }}</span>
+                        <button type="button" class="jump-to-sidebar-btn" onclick="event.stopPropagation(); jumpToLibFile('{{ sm.name }}')">Edit in sidebar →</button>
+                    </div>
+                    <div class="code-container">
+                        <button class="copy-btn" onclick="copyLibCode(this, '{{ sm.name }}')">Copy</button>
+                        <pre class="code-block"><code class="highlight">{{ sm.code_highlighted }}</code></pre>
+                    </div>
+                </div>
+                {% endfor %}
             </div>
         </div>
 
@@ -907,29 +1231,149 @@ const cardArray = Array.from(cards);
 /* ── Raw code storage for copy ─────────────────────────── */
 const rawCode = {};
 {% for card in cards %}
-rawCode['{{ card.slug }}'] = {{ card.code | tojson }};
+rawCode['{{ card.slug }}'] = {{ card.wrapper_code | tojson }};
 {% endfor %}
 
 /* ── Shared code panel ─────────────────────────────────── */
-const libCode = {};
-{% for lf in lib_files %}
-libCode['{{ lf.name }}'] = {{ lf.code_highlighted | tojson }};
+const libCode = {};         // name → highlighted HTML
+const libRawCode = {};      // name → raw Python source (for copy + editor)
+{% for lf in all_lib_entries %}
+libCode[{{ lf.name | tojson }}] = {{ lf.code_highlighted | tojson }};
 {% endfor %}
+
+/* Lazy-load raw code for libs on demand (via Copy button). Fetched from the
+   server in live mode, otherwise we fall back to the highlighted HTML stripped.
+   The live-mode init script populates libRawCode proactively. */
 
 function openLibFile(name) {
     document.getElementById('libCodeTitle').textContent = name;
     document.getElementById('libCodeContent').innerHTML = libCode[name] || '';
-    document.getElementById('libCodePanel').classList.add('open');
+    // Remember which file is currently open so live-mode edit hooks can
+    // wire up Monaco against the correct target.
+    const panel = document.getElementById('libCodePanel');
+    panel.dataset.currentFile = name;
+    panel.classList.add('open');
+    // Highlight the active file in the sidebar tree.
+    document.querySelectorAll('.sidebar-tree .tree-file').forEach(el => el.classList.remove('active'));
+    const sel = document.querySelector('.sidebar-tree .tree-file[data-lib-name="' + CSS.escape(name) + '"]');
+    if (sel) sel.classList.add('active');
+    // Fire a custom event so live-mode code can replace the <pre> with Monaco.
+    panel.dispatchEvent(new CustomEvent('libpanel:opened', { detail: { name } }));
 }
 function closeLibPanel() {
-    document.getElementById('libCodePanel').classList.remove('open');
+    const panel = document.getElementById('libCodePanel');
+    panel.classList.remove('open');
+    delete panel.dataset.currentFile;
+    // Clear any Monaco/editor state the live-mode layer may have attached.
+    panel.dispatchEvent(new CustomEvent('libpanel:closed'));
+    // Restore the static Pygments DOM so the next openLibFile() can target it.
+    // (Live-mode replaces the body with a Monaco container on open.)
+    const body = panel.querySelector('.lib-code-body');
+    if (body) body.innerHTML = '<pre><code class="highlight" id="libCodeContent"></code></pre>';
+    document.querySelectorAll('.sidebar-tree .tree-file').forEach(el => el.classList.remove('active'));
 }
+
+function copyLibCode(btn, name) {
+    const text = libRawCode[name];
+    if (!text) {
+        btn.textContent = 'Open first';
+        setTimeout(() => btn.textContent = 'Copy', 1200);
+        return;
+    }
+    navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 1500);
+    });
+}
+
+function jumpToLibFile(name) {
+    // Expand ancestor <details> so the target file is visible.
+    const tree = document.getElementById('libTree');
+    if (tree) {
+        const el = tree.querySelector('.tree-file[data-lib-name="' + CSS.escape(name) + '"]');
+        if (el) {
+            let parent = el.parentElement;
+            while (parent && parent !== tree) {
+                if (parent.tagName === 'DETAILS') parent.open = true;
+                parent = parent.parentElement;
+            }
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
+    openLibFile(name);
+}
+
+function scrollToCard(slug) {
+    const card = document.getElementById('card-' + slug);
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.remove('card-flash');
+    // Force reflow so the animation restarts on repeated clicks.
+    void card.offsetWidth;
+    card.classList.add('card-flash');
+    setTimeout(() => card.classList.remove('card-flash'), 650);
+}
+
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape' && document.getElementById('libCodePanel').classList.contains('open')) {
         closeLibPanel();
         e.stopPropagation();
     }
 });
+
+/* ── Code tab switching ────────────────────────────────── */
+function switchCodeTab(btn) {
+    const strip = btn.parentElement;
+    const body = strip.parentElement;
+    strip.querySelectorAll('.code-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    body.querySelectorAll(':scope > .code-pane').forEach(p => p.classList.remove('active'));
+    if (btn.dataset.tabKind === 'wrapper') {
+        const pane = body.querySelector(':scope > .code-pane[data-pane-kind="wrapper"]');
+        if (pane) pane.classList.add('active');
+    } else {
+        const name = btn.dataset.libName;
+        const pane = body.querySelector(':scope > .code-pane[data-pane-kind="shared"][data-lib-name="' + CSS.escape(name) + '"]');
+        if (pane) pane.classList.add('active');
+    }
+}
+
+/* ── Sidebar splitter ──────────────────────────────────── */
+(function() {
+    const SIDEBAR_KEY = 'labdash_sidebar_width';
+    const splitter = document.getElementById('sidebarSplitter');
+    const sidebar = document.querySelector('.sidebar');
+    if (!splitter || !sidebar) return;
+
+    const MIN = 200, MAX = 600;
+    const saved = parseInt(localStorage.getItem(SIDEBAR_KEY) || '0', 10);
+    if (saved >= MIN && saved <= MAX) {
+        sidebar.style.width = saved + 'px';
+        sidebar.style.minWidth = saved + 'px';
+    }
+
+    let dragging = false;
+    splitter.addEventListener('mousedown', e => {
+        dragging = true;
+        splitter.classList.add('dragging');
+        document.body.classList.add('splitter-dragging');
+        e.preventDefault();
+    });
+    document.addEventListener('mousemove', e => {
+        if (!dragging) return;
+        const w = Math.max(MIN, Math.min(MAX, e.clientX));
+        sidebar.style.width = w + 'px';
+        sidebar.style.minWidth = w + 'px';
+    });
+    document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        splitter.classList.remove('dragging');
+        document.body.classList.remove('splitter-dragging');
+        const w = parseInt(sidebar.style.width, 10);
+        if (w) { try { localStorage.setItem(SIDEBAR_KEY, String(w)); } catch(e) {} }
+    });
+})();
 
 /* ── Group subtitles ──────────────────────────────────── */
 function updateGroupSubtitles() {

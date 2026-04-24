@@ -166,8 +166,8 @@ def is_stale(
     """Return True if `slug` needs to be rerun.
 
     Transitive rules:
-    - self-stale if analysis.py is newer than the oldest of its output files
-      (or if its output dir is empty);
+    - self-stale if analysis.py OR any imported _lib/ file is newer than the
+      oldest of its output files (or if its output dir is empty);
     - dep-stale if any upstream dep's newest output is newer than this
       slug's oldest output;
     - recursively stale if any upstream dep is itself stale.
@@ -193,10 +193,22 @@ def is_stale(
         _memo[slug] = True
         return True
 
-    # Self-stale: source newer than my oldest output.
+    # Self-stale: wrapper source newer than my oldest output.
     if analysis["analysis_path"].stat().st_mtime > my_oldest:
         _memo[slug] = True
         return True
+
+    # Self-stale via shared module: any imported _lib/ file newer than output.
+    # `shared_paths` (attached by builder) is a list of existing _lib/-relative
+    # paths resolved against the analyses_dir's _lib/ directory. Fall back to
+    # the analysis_path's grandparent-heuristic if builder didn't set it.
+    for shared_abs in _shared_paths_abs(analysis):
+        try:
+            if shared_abs.stat().st_mtime > my_oldest:
+                _memo[slug] = True
+                return True
+        except FileNotFoundError:
+            continue
 
     for dep in analysis["meta"].get("dependencies", []) or []:
         dep_dir = output_root / dep
@@ -210,6 +222,54 @@ def is_stale(
 
     _memo[slug] = False
     return False
+
+
+def _shared_paths_abs(analysis: dict) -> list[Path]:
+    """Absolute paths of _lib/ files this wrapper imports.
+
+    Prefers `analysis["shared_paths"]` (list of strings relative to _lib/,
+    normally attached by the builder). Falls back to parsing the wrapper's
+    AST on demand so pure runner paths (e.g. `labdash build --only-stale`
+    without a preceding builder pass) still pick up shared-file edits.
+    """
+    import ast as _ast
+    # analyses_dir = analysis.py's grandparent
+    analyses_dir = analysis["analysis_path"].parent.parent
+    lib_dir: Path | None = None
+    for d in [analyses_dir, analyses_dir.parent]:
+        if (d / "_lib").is_dir():
+            lib_dir = d / "_lib"
+            break
+    if lib_dir is None:
+        return []
+
+    rels = analysis.get("shared_paths")
+    if rels is None:
+        rels = []
+        try:
+            tree = _ast.parse(analysis["analysis_path"].read_text())
+        except (SyntaxError, OSError):
+            return []
+        seen: set[str] = set()
+        for node in _ast.walk(tree):
+            mods: list[str] = []
+            if isinstance(node, _ast.ImportFrom):
+                if node.module and node.module.startswith("_lib."):
+                    mods.append(node.module)
+            elif isinstance(node, _ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith("_lib."):
+                        mods.append(alias.name)
+            for mod in mods:
+                rel = mod[len("_lib."):].replace(".", "/") + ".py"
+                if rel in seen:
+                    continue
+                seen.add(rel)
+                if (lib_dir / rel).is_file():
+                    rels.append(rel)
+        analysis["shared_paths"] = rels  # cache back
+
+    return [lib_dir / rel for rel in rels]
 
 
 def transitive_deps(slug: str, by_slug: dict[str, dict]) -> list[str]:

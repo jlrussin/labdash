@@ -478,7 +478,9 @@ tags:
 
 `labdash build` computes staleness **transitively**:
 
-- An analysis is self-stale if its `analysis.py` mtime is newer than its oldest output file (or if it has no outputs).
+- An analysis is self-stale if its `analysis.py` OR any `_lib/` file it imports is newer than its oldest output file (or if it has no outputs). `_lib/` imports are detected by static AST parse of the wrapper.
 - An analysis is dep-stale if any upstream dependency's newest output is newer than this one's oldest output, or if any upstream is itself stale.
 
 Stale analyses are flagged with a red "stale" badge in the viewer. The **Run All Stale** button reruns only them, in topo order. Clicking **Run** on a single card runs any transitively-stale upstream before the target.
+
+**Implication for shared-plot edits.** Editing `_lib/plots/X.py` (via the in-viewer sidebar editor or directly on disk) automatically marks every wrapper that imports it as stale. The sidebar editor's Save response lists the affected slugs; the viewer adds stale badges to those cards without a reload.

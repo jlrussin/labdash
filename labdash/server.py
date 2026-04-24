@@ -32,6 +32,11 @@ class CodeUpdate(BaseModel):
     code: str
 
 
+class LibCodeUpdate(BaseModel):
+    path: str  # relative to _lib/, e.g. "plots/sde_accuracy.py"
+    code: str
+
+
 class MetaUpdate(BaseModel):
     group: str | None = None
     tags: list[str] | None = None
@@ -244,6 +249,92 @@ def create_app(config: dict) -> FastAPI:
 
         analysis["analysis_path"].write_text(update.code)
         return {"status": "saved", "slug": slug}
+
+    @app.get("/api/lib-raw")
+    def list_lib_raw():
+        """Return {rel_path: source_code} for every .py file under _lib/.
+
+        Used by the live-mode client to populate Monaco editor buffers and
+        the Copy button on shared-code panes.
+        """
+        from .builder import _resolve_lib_dir
+        lib_dir = _resolve_lib_dir(analyses_dir)
+        if lib_dir is None:
+            return {}
+        out: dict[str, str] = {}
+        for f in sorted(lib_dir.glob("*.py")):
+            if f.name == "__init__.py":
+                continue
+            out[f.name] = f.read_text()
+        plots_dir = lib_dir / "plots"
+        if plots_dir.is_dir():
+            for f in sorted(plots_dir.glob("*.py")):
+                if f.name == "__init__.py":
+                    continue
+                out[f"plots/{f.name}"] = f.read_text()
+        return out
+
+    @app.put("/api/lib-code")
+    def save_lib_code(update: LibCodeUpdate):
+        """Save edited code back to a file under _lib/.
+
+        Path-traversal-safe: the resolved target must stay inside _lib/.
+        On success, clears _lib from sys.modules so the next run re-imports,
+        returns the list of wrappers whose output is now stale because they
+        import this file, and the re-highlighted HTML so the client can
+        refresh in-card shared panes without losing Pygments colors.
+        """
+        from .builder import _resolve_lib_dir, _parse_wrapper_imports, _highlight_python
+        lib_dir = _resolve_lib_dir(analyses_dir)
+        if lib_dir is None:
+            raise HTTPException(404, "_lib/ not found")
+
+        # Validate path stays inside lib_dir (rejects .., absolute paths, etc.)
+        lib_root = lib_dir.resolve()
+        try:
+            target = (lib_dir / update.path).resolve()
+            target.relative_to(lib_root)
+        except (ValueError, OSError):
+            raise HTTPException(400, f"Invalid path: {update.path}")
+        if not target.is_file():
+            raise HTTPException(404, f"File not found: {update.path}")
+        if target.suffix != ".py":
+            raise HTTPException(400, "Only .py files are editable")
+
+        # Log the diff before overwriting
+        old_code = target.read_text()
+        if old_code == update.code:
+            return {
+                "status": "unchanged",
+                "path": update.path,
+                "stale_slugs": [],
+                "code_highlighted": _highlight_python(update.code),
+            }
+
+        diff_summary = _make_code_diff_summary(old_code, update.code)
+        _append_change_log(
+            analyses_dir, f"_lib/{update.path}", "shared code edit", diff_summary
+        )
+        target.write_text(update.code)
+
+        # Clear _lib from sys.modules so next run re-imports fresh code.
+        for k in [k for k in sys.modules if "_lib" in k]:
+            del sys.modules[k]
+
+        # Find wrappers that import this file; they are now stale.
+        rel = update.path.replace("\\", "/")
+        stale_slugs: list[str] = []
+        for a in discover_analyses(analyses_dir):
+            rels = _parse_wrapper_imports(a["analysis_path"])
+            if rel in rels:
+                stale_slugs.append(a["slug"])
+
+        return {
+            "status": "saved",
+            "path": update.path,
+            "stale_slugs": stale_slugs,
+            "code_highlighted": _highlight_python(update.code),
+        }
 
     @app.get("/api/notes/{slug}")
     def get_notes(slug: str):
@@ -595,14 +686,19 @@ window.reloadData = async function() {
     const savedCode = {};  // last-saved version per slug
 
     require(['vs/editor/editor.main'], function() {
-        // Replace all Pygments code blocks with Monaco editors (read-only)
+        // Replace the wrapper pane's Pygments code block with Monaco (editable).
+        // Shared panes (read-only) keep their Pygments <pre> — no Monaco there.
         document.querySelectorAll('.card').forEach(card => {
             const slug = card.dataset.slug;
             const codeSection = card.querySelector('.expandable[id^="code-"]');
             if (!codeSection) return;
 
-            const body = codeSection.querySelector('.expandable-body');
-            const codeBlock = body.querySelector('.code-container');
+            // The wrapper pane is the element we inject Monaco into. It was
+            // a direct child of .expandable-body pre-tabs; post-tabs it's the
+            // .code-pane[data-pane-kind="wrapper"] descendant. Either works.
+            const wrapperPane = codeSection.querySelector('.code-pane[data-pane-kind="wrapper"]')
+                             || codeSection.querySelector('.expandable-body');
+            const codeBlock = wrapperPane.querySelector('.code-container');
             const errorEl = card.querySelector('.error-display');
             const outputDiv = card.querySelector('.card-output');
 
@@ -612,7 +708,7 @@ window.reloadData = async function() {
             // Create Monaco container
             const monacoContainer = document.createElement('div');
             monacoContainer.style.cssText = 'height:400px;border:1px solid #333;border-radius:6px;overflow:hidden;';
-            body.insertBefore(monacoContainer, codeBlock);
+            wrapperPane.insertBefore(monacoContainer, codeBlock);
 
             // Store initial code
             savedCode[slug] = rawCode[slug];
@@ -664,7 +760,7 @@ window.reloadData = async function() {
             cancelBtn.style.display = 'none';
 
             btnBar.append(editBtn, runBtn, saveBtn, saveRunBtn, cancelBtn);
-            body.insertBefore(btnBar, monacoContainer);
+            wrapperPane.insertBefore(btnBar, monacoContainer);
 
             // ── Edit mode toggle ──
             function enterEditMode() {
@@ -793,5 +889,126 @@ window.reloadData = async function() {
             });
         });
     });
+})();
+
+/* ── Live Mode: Editable shared-code panel (Monaco) ────── */
+(function() {
+    // Fetch all _lib sources once; populates libRawCode for Copy + Monaco.
+    fetch('/api/lib-raw').then(r => r.ok ? r.json() : {}).then(data => {
+        Object.assign(libRawCode, data);
+    }).catch(() => {});
+
+    const panel = document.getElementById('libCodePanel');
+    const body = panel.querySelector('.lib-code-body');
+    const headerActions = document.getElementById('libCodeHeaderActions');
+    let libEditor = null;
+
+    function markStaleBadges(slugs) {
+        for (const slug of slugs) {
+            const card = document.getElementById('card-' + slug);
+            if (!card) continue;
+            if (!card.querySelector('.badge-stale')) {
+                const badges = card.querySelector('.card-badges');
+                const stale = document.createElement('span');
+                stale.className = 'badge badge-stale';
+                stale.textContent = 'stale';
+                badges.appendChild(stale);
+            }
+        }
+    }
+
+    panel.addEventListener('libpanel:opened', e => {
+        const name = e.detail.name;
+
+        // Clear existing editor / buttons
+        headerActions.innerHTML = '';
+        if (libEditor) { libEditor.dispose(); libEditor = null; }
+        body.innerHTML = '';
+
+        // Create fresh Monaco container.
+        const mc = document.createElement('div');
+        mc.style.cssText = 'height:calc(100vh - 52px);border:none;';
+        body.appendChild(mc);
+
+        const source = libRawCode[name];
+        if (source === undefined) {
+            // Fall back to fetch if not preloaded yet.
+            fetch('/api/lib-raw').then(r => r.json()).then(data => {
+                Object.assign(libRawCode, data);
+                if (panel.dataset.currentFile === name) {
+                    mountEditor(mc, name, libRawCode[name] || '');
+                }
+            });
+        } else {
+            mountEditor(mc, name, source);
+        }
+    });
+
+    panel.addEventListener('libpanel:closed', () => {
+        if (libEditor) { libEditor.dispose(); libEditor = null; }
+        headerActions.innerHTML = '';
+    });
+
+    function mountEditor(container, name, value) {
+        require(['vs/editor/editor.main'], function() {
+            const editor = monaco.editor.create(container, {
+                value,
+                language: 'python',
+                theme: 'vs-dark',
+                minimap: { enabled: false },
+                fontSize: 13,
+                lineNumbers: 'on',
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+                tabSize: 4,
+                insertSpaces: true,
+                wordWrap: 'on',
+                padding: { top: 8 },
+                readOnly: false,
+                domReadOnly: false,
+            });
+            libEditor = editor;
+
+            const saveBtn = document.createElement('button');
+            saveBtn.className = 'btn btn-save';
+            saveBtn.textContent = 'Save';
+            headerActions.appendChild(saveBtn);
+
+            saveBtn.addEventListener('click', async () => {
+                const code = editor.getValue();
+                saveBtn.textContent = 'Saving...';
+                saveBtn.disabled = true;
+                try {
+                    const resp = await fetch('/api/lib-code', {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ path: name, code })
+                    });
+                    const data = await resp.json();
+                    if (resp.ok) {
+                        libRawCode[name] = code;
+                        // Refresh in-card shared panes with Pygments-highlighted HTML
+                        // returned from the server so edits keep syntax colors.
+                        if (data.code_highlighted !== undefined) {
+                            libCode[name] = data.code_highlighted;
+                            document.querySelectorAll('.code-pane[data-pane-kind="shared"][data-lib-name="' + CSS.escape(name) + '"] pre code').forEach(el => {
+                                el.innerHTML = data.code_highlighted;
+                            });
+                        }
+                        markStaleBadges(data.stale_slugs || []);
+                        saveBtn.textContent = (data.stale_slugs && data.stale_slugs.length)
+                            ? ('Saved · ' + data.stale_slugs.length + ' stale')
+                            : 'Saved!';
+                    } else {
+                        saveBtn.textContent = 'Error: ' + (data.detail || resp.status);
+                    }
+                } catch(e) {
+                    saveBtn.textContent = 'Error!';
+                }
+                saveBtn.disabled = false;
+                setTimeout(() => { saveBtn.textContent = 'Save'; }, 2500);
+            });
+        });
+    }
 })();
 </script>'''

@@ -473,22 +473,28 @@ Skip analyses whose outputs are up-to-date. Stale means either the source is new
 - **Group navigation** -- click a group name to filter to that group. "All" shows everything.
 - **Tag filters** -- toggle tags on/off to filter analyses. Multiple tags use OR logic.
 - **Status filters** -- filter by `draft`, `active`, `publication`, or `stale` (output older than source).
-- **Shared code panel** -- click any `_lib/` file in the sidebar to open it in a slide-out panel. Press `Escape` to close.
+- **Shared code tree** -- `_lib/` files shown as a collapsible tree. The `plots/` subdirectory is partitioned into **"used here"** (imported by at least one wrapper in the current collection, expanded by default) and **"unused here"** (not imported here, collapsed by default). Hovering a file shows a tooltip with the list of analyses that import it. Click any file to open it in the side editor panel; press `Escape` or the `×` button to close.
+- **Resizable boundary** -- drag the 4px splitter between the sidebar and the main content to adjust sidebar width. Width persists across page loads (localStorage).
 
 ### Card features
 
 - **Collapsible** -- click the card header to collapse/expand. State persists across page loads (localStorage).
 - **Draggable** -- drag cards to reorder them within the dashboard (live mode).
 - **Status badge** -- color-coded (`draft` = yellow, `active` = blue, `publication` = green). Clickable in live mode to cycle through statuses.
-- **Stale badge** -- red badge appears when `analysis.py` is newer than its output.
+- **Stale badge** -- red badge appears when `analysis.py`, any `_lib/` file the analysis imports, or any upstream pipeline node is newer than its output.
 - **Figure ID badge** -- shown when `figure_id` is set in meta.yaml.
+- **Pipeline lineage** -- cards with `dependencies:` show a breadcrumb strip under the title with the transitive upstream chain ending at the current card (e.g., `build_trials_df › apply_exclusions › sde_accuracy`). Each segment is a clickable link that scrolls to that card with a brief flash highlight. Long slugs truncate with ellipsis and expand on hover. Long chains scroll horizontally with edge fade.
 - **Expandable sections** -- Code, Methodology, Notes, Agent Notes, and Stats are all collapsible sections within each card.
 - **Image actions** -- hover over output images to reveal copy/download buttons.
 
 ### Code view
 
-- **Static mode** (`labdash build`): Pygments syntax highlighting with a copy button.
-- **Live mode** (`labdash serve`): Monaco editor with Python language support, dark theme. Starts read-only; click "Edit" to enable editing, then "Save", "Run", or "Save & Run".
+The Code section uses tabs when the analysis imports one or more `_lib/` modules:
+
+- **Analysis tab** -- the card's own `analysis.py`. Pygments-highlighted in static mode; in live mode replaced by a Monaco editor (click "Edit" to enable, then "Save", "Run", or "Save & Run"). The name is always "Analysis" regardless of whether the code is a thin shared-plot wrapper or a collection-specific implementation.
+- **Shared tabs** -- one per imported `_lib/` module (e.g., `◇ plots/sde_accuracy.py · 3` indicating it's used by 3 analyses). Shared tabs are **read-only** in the card to prevent accidental cross-collection edits. They carry an **"Edit in sidebar →"** button that opens the file in the side editor panel. The side editor is fully editable; saving there updates the rendered shared tab in-place (including Pygments colors) and marks every card that imports the file as stale.
+
+When an analysis has no shared imports, the Code section shows a single pane with no tab strip (graceful fallback).
 
 ### Notes
 

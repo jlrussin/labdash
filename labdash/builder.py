@@ -1,5 +1,6 @@
 """Generates static HTML dashboard from analysis outputs."""
 
+import ast
 import os
 import base64
 import json
@@ -18,6 +19,8 @@ from .runner import (
     load_registry,
     _is_new_format_registry,
     is_stale,
+    transitive_deps,
+    _resolve_run_order,
 )
 
 
@@ -47,25 +50,98 @@ def _highlight_python(code: str) -> str:
     return highlight(code, PythonLexer(), HtmlFormatter(nowrap=True, style=PYGMENTS_STYLE))
 
 
+def _parse_wrapper_imports(analysis_path: Path) -> list[str]:
+    """Return relative paths under _lib/ that this wrapper imports.
+
+    Parses the AST of a wrapper's analysis.py and collects imports from
+    the `_lib` package. Returns paths like "plots/sde_accuracy.py" or
+    "pipeline_steps.py" (POSIX separators, relative to _lib/).
+
+    Only modules resolvable to a concrete file are returned (not package
+    imports like `from _lib import style`). Parse errors return [].
+    """
+    try:
+        tree = ast.parse(analysis_path.read_text())
+    except (SyntaxError, OSError):
+        return []
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            # `from _lib.plots.sde_accuracy import make`
+            # `from _lib.pipeline import load_pickle`
+            if mod == "_lib" or not mod.startswith("_lib."):
+                continue
+            # Strip "_lib." prefix; convert dots to "/"; append ".py".
+            rel = mod[len("_lib."):].replace(".", "/") + ".py"
+            if rel not in seen:
+                seen.add(rel)
+                found.append(rel)
+        elif isinstance(node, ast.Import):
+            # `import _lib.plots.sde_accuracy` (rare but handle)
+            for alias in node.names:
+                name = alias.name
+                if name == "_lib" or not name.startswith("_lib."):
+                    continue
+                rel = name[len("_lib."):].replace(".", "/") + ".py"
+                if rel not in seen:
+                    seen.add(rel)
+                    found.append(rel)
+    return found
+
+
+def _resolve_lib_dir(analyses_dir: Path) -> Path | None:
+    """Find the _lib/ dir: first under analyses_dir, then its parent."""
+    for d in [analyses_dir, analyses_dir.parent]:
+        lib_dir = d / "_lib"
+        if lib_dir.is_dir():
+            return lib_dir
+    return None
+
+
 def build_card_data(
     analysis: dict,
     output_dir: Path,
     *,
     by_slug: dict[str, dict] | None = None,
     stale_memo: dict[str, bool] | None = None,
+    lib_dir: Path | None = None,
+    used_by_count: dict[str, int] | None = None,
 ) -> dict:
     """Build template context for a single analysis card.
 
     `by_slug` and `stale_memo` are threaded in so transitive staleness is
-    computed once per build (memoized across all cards).
+    computed once per build (memoized across all cards). `lib_dir` is the
+    resolved `_lib/` directory for reading shared-module source. `used_by_count`
+    maps "plots/X.py" → number of wrappers in this collection that import it,
+    used to annotate shared tabs.
     """
     slug = analysis["slug"]
     meta = analysis["meta"]
     slug_output = output_dir / slug
 
-    # Read source code
+    # Read wrapper source
     code = analysis["analysis_path"].read_text()
     code_highlighted = _highlight_python(code)
+
+    # Shared modules imported by this wrapper (read source, highlight, annotate)
+    shared_modules: list[dict] = []
+    shared_rel = analysis.get("shared_paths", [])
+    if lib_dir is not None:
+        for rel in shared_rel:
+            src = lib_dir / rel
+            if not src.is_file():
+                continue
+            display_name = rel  # e.g. "plots/sde_accuracy.py"
+            shared_modules.append({
+                "name": rel,
+                "display_name": display_name,
+                "code_highlighted": _highlight_python(src.read_text()),
+                "used_by_count": (used_by_count or {}).get(rel, 1),
+            })
 
     # Read notes
     notes_path = analysis["dir"] / "notes.md"
@@ -103,6 +179,9 @@ def build_card_data(
         by_slug = {}
     stale = is_stale(slug, by_slug, output_dir, stale_memo)
 
+    # Lineage: transitive deps + self, topo-sorted.
+    lineage = _build_lineage(slug, by_slug)
+
     return {
         "slug": slug,
         "title": meta.get("title", slug),
@@ -116,6 +195,10 @@ def build_card_data(
         "caption": meta.get("caption", ""),
         "code": code,
         "code_highlighted": code_highlighted,
+        "wrapper_code": code,
+        "wrapper_code_highlighted": code_highlighted,
+        "shared_modules": shared_modules,
+        "lineage": lineage,
         "notes_raw": notes_raw or "",
         "notes_html": notes_html,
         "agent_notes_html": agent_notes_html,
@@ -128,37 +211,91 @@ def build_card_data(
     }
 
 
-def _build_lib_data(analyses_dir: Path) -> list[dict]:
-    """Discover and read _lib/ source files for display in sidebar.
+def _build_lineage(slug: str, by_slug: dict[str, dict]) -> list[dict]:
+    """Return transitive-dep chain (topo order) ending with the current slug.
 
-    Includes both top-level _lib/*.py and _lib/plots/*.py (the shared
-    pure plot functions convention).
+    Each entry: {slug, title, is_pipeline, is_current}.
     """
-    lib_files = []
-    # Walk up from analyses_dir to find _lib (collection layout)
-    for d in [analyses_dir, analyses_dir.parent]:
-        lib_dir = d / "_lib"
-        if lib_dir.is_dir():
-            for f in sorted(lib_dir.glob("*.py")):
-                if f.name == "__init__.py":
-                    continue
-                code = f.read_text()
-                lib_files.append({
-                    "name": f.name,
-                    "code_highlighted": _highlight_python(code),
-                })
-            plots_dir = lib_dir / "plots"
-            if plots_dir.is_dir():
-                for f in sorted(plots_dir.glob("*.py")):
-                    if f.name == "__init__.py":
-                        continue
-                    code = f.read_text()
-                    lib_files.append({
-                        "name": f"plots/{f.name}",
-                        "code_highlighted": _highlight_python(code),
-                    })
-            break
-    return lib_files
+    upstream = transitive_deps(slug, by_slug)
+    if not upstream:
+        # Still emit the current node so the renderer can choose whether to hide.
+        a = by_slug.get(slug)
+        if a is None:
+            return []
+        return [_lineage_segment(a, is_current=True)]
+
+    subset = [by_slug[s] for s in upstream if s in by_slug]
+    # Topo-sort the subset by resolving against the full by_slug DAG.
+    ordered = _resolve_run_order(subset + [by_slug[slug]])
+    return [_lineage_segment(a, is_current=(a["slug"] == slug)) for a in ordered]
+
+
+def _lineage_segment(analysis: dict, *, is_current: bool) -> dict:
+    meta = analysis.get("meta", {})
+    return {
+        "slug": analysis["slug"],
+        "title": meta.get("title", analysis["slug"]),
+        "is_pipeline": meta.get("output_format") == "pipeline",
+        "is_current": is_current,
+    }
+
+
+def _build_lib_data(analyses_dir: Path, used_by: dict[str, list[str]] | None = None) -> dict:
+    """Discover _lib/ sources and partition plots/ into used/unused sections.
+
+    Returns:
+        {
+          "lib_files":    [{"name": "data_loading.py", "code_highlighted": ...}, ...],
+          "plots_used":   [{"name": "plots/sde_accuracy.py", "display": "sde_accuracy.py",
+                            "code_highlighted": ..., "used_by": ["sde_accuracy", ...]}, ...],
+          "plots_unused": [{"name": "plots/unrelated.py", "display": "unrelated.py",
+                            "code_highlighted": ...}, ...],
+        }
+
+    `used_by` maps "plots/X.py" → [slug, ...] of wrappers in this collection
+    that import it. Files not present in used_by land in plots_unused.
+    Top-level _lib/*.py is never filtered.
+    """
+    used_by = used_by or {}
+    lib_files: list[dict] = []
+    plots_used: list[dict] = []
+    plots_unused: list[dict] = []
+
+    lib_dir = _resolve_lib_dir(analyses_dir)
+    if lib_dir is None:
+        return {"lib_files": [], "plots_used": [], "plots_unused": []}
+
+    for f in sorted(lib_dir.glob("*.py")):
+        if f.name == "__init__.py":
+            continue
+        lib_files.append({
+            "name": f.name,
+            "code_highlighted": _highlight_python(f.read_text()),
+        })
+
+    plots_dir = lib_dir / "plots"
+    if plots_dir.is_dir():
+        for f in sorted(plots_dir.glob("*.py")):
+            if f.name == "__init__.py":
+                continue
+            rel = f"plots/{f.name}"
+            importers = used_by.get(rel, [])
+            entry = {
+                "name": rel,
+                "display": f.name,
+                "code_highlighted": _highlight_python(f.read_text()),
+            }
+            if importers:
+                entry["used_by"] = sorted(importers)
+                plots_used.append(entry)
+            else:
+                plots_unused.append(entry)
+
+    return {
+        "lib_files": lib_files,
+        "plots_used": plots_used,
+        "plots_unused": plots_unused,
+    }
 
 
 def _load_project_config(analyses_dir: Path) -> dict:
@@ -177,11 +314,38 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
 
     analyses = ordered_analyses(analyses_dir)
     by_slug = {a["slug"]: a for a in analyses}
+    lib_dir = _resolve_lib_dir(analyses_dir)
+
+    # Parse wrapper imports once; attach shared_paths to each analysis dict so
+    # staleness checks and card-data rendering use a single source of truth.
+    used_by: dict[str, list[str]] = {}
+    for a in analyses:
+        rels = _parse_wrapper_imports(a["analysis_path"])
+        # Keep only imports that resolve to an existing file under _lib/.
+        resolved: list[str] = []
+        if lib_dir is not None:
+            for rel in rels:
+                if (lib_dir / rel).is_file():
+                    resolved.append(rel)
+        a["shared_paths"] = resolved
+        for rel in resolved:
+            used_by.setdefault(rel, []).append(a["slug"])
+
+    used_by_count = {k: len(v) for k, v in used_by.items()}
+
     stale_memo: dict[str, bool] = {}
 
-    # Build card data for each analysis (memoized staleness)
-    cards = [build_card_data(a, output_dir, by_slug=by_slug, stale_memo=stale_memo)
-             for a in analyses]
+    # Build card data for each analysis (memoized staleness, shared imports)
+    cards = [
+        build_card_data(
+            a, output_dir,
+            by_slug=by_slug,
+            stale_memo=stale_memo,
+            lib_dir=lib_dir,
+            used_by_count=used_by_count,
+        )
+        for a in analyses
+    ]
 
     # Organize by group as an ordered list of {name, cards} dicts
     groups_ordered = []
@@ -200,8 +364,15 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
     # All statuses present
     all_statuses = sorted({card["status"] for card in cards})
 
-    # Shared _lib files for sidebar
-    lib_files = _build_lib_data(analyses_dir)
+    # Shared _lib files for sidebar (partitioned used/unused)
+    lib_data = _build_lib_data(analyses_dir, used_by=used_by)
+
+    # Flat list used by client JS for openLibFile() lookups.
+    all_lib_entries = (
+        lib_data["lib_files"]
+        + lib_data["plots_used"]
+        + lib_data["plots_unused"]
+    )
 
     # Project/collection config
     config = _load_project_config(analyses_dir)
@@ -225,7 +396,8 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
         all_statuses=all_statuses,
         pygments_css=pygments_css,
         total_count=len(cards),
-        lib_files=lib_files,
+        lib_data=lib_data,
+        all_lib_entries=all_lib_entries,
         collection_title=collection_title,
     )
 
