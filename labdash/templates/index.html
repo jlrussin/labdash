@@ -142,6 +142,94 @@ body {
 .card[draggable="true"] .card-header { cursor: grab; }
 .card[draggable="true"] .card-header:active { cursor: grabbing; }
 .card.dragging { opacity: 0.4; }
+
+/* Selection state — strong blue ring around selected cards */
+.card.selected {
+    box-shadow: 0 0 0 2px #3498db;
+    background: #f5fafe;
+}
+.card.selected:hover { box-shadow: 0 0 0 2px #2980b9; }
+
+/* FLIP animation hook — set by JS only during reorder */
+.card.flip-animating { transition: transform 180ms cubic-bezier(0.4, 0, 0.2, 1); }
+
+/* Order-control buttons (per-card) — sit immediately after the title */
+.card-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;     /* lets the title ellipsize if needed */
+}
+.card-order-controls {
+    display: inline-flex;
+    gap: 0.15rem;
+    opacity: 0.25;
+    transition: opacity 0.15s ease-out;
+    flex-shrink: 0;
+}
+.card:hover .card-order-controls { opacity: 1; }
+.card-order-btn {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 0.05rem 0.35rem;
+    font-size: 0.85rem;
+    line-height: 1.1;
+    color: #6b7682;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.card-order-btn:hover {
+    background: #eef4fa;
+    border-color: #cfd9e3;
+    color: #2c3e50;
+}
+.card-order-btn:active { background: #dde7f2; }
+.card-order-btn[disabled] {
+    /* No opacity here — it would compose with the parent's 0.25 idle opacity
+       and the button would all but disappear. Use a much lighter colour + the
+       not-allowed cursor for an obvious "won't respond" affordance. */
+    color: #ccd0d5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* Floating selection-count chip (shown via JS when selection > 0) */
+.selection-chip {
+    position: fixed;
+    top: 1rem;
+    right: 1.5rem;
+    display: none;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.8rem;
+    background: #2c3e50;
+    color: #fff;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    z-index: 1000;
+    user-select: none;
+    animation: chip-fade-in 0.18s ease-out;
+}
+.selection-chip.visible { display: inline-flex; }
+@keyframes chip-fade-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.selection-chip-clear {
+    background: rgba(255,255,255,0.15);
+    border: none;
+    color: #fff;
+    border-radius: 999px;
+    padding: 0.2rem 0.65rem;
+    cursor: pointer;
+    font-size: 0.78rem;
+    transition: background 0.1s;
+}
+.selection-chip-clear:hover { background: rgba(255,255,255,0.28); }
+
 .card-header {
     padding: 1rem 1.2rem;
     border-bottom: 1px solid #f0f0f0;
@@ -910,6 +998,12 @@ body.splitter-dragging * { user-select: none !important; }
 </head>
 <body>
 
+<!-- Floating selection chip (shown when one or more cards are selected) -->
+<div class="selection-chip" id="selectionChip" role="status" aria-live="polite">
+    <span id="selectionChipCount">0 selected</span>
+    <button type="button" class="selection-chip-clear" onclick="clearSelection()">Clear</button>
+</div>
+
 <!-- Sidebar -->
 <nav class="sidebar">
     <h1>LabDash</h1>
@@ -958,14 +1052,14 @@ body.splitter-dragging * { user-select: none !important; }
         <button class="filter-btn reload-data-btn" id="reloadDataBtn" onclick="reloadData()" style="display:none;width:100%;margin-bottom:0.5rem;">Reload Data</button>
         <ul class="sidebar-tree" id="libTree">
             <li>
-                <details open>
+                <details>
                     <summary><span class="tree-label">_lib/</span></summary>
                     <div class="tree-body">
                         {% for lf in lib_data.lib_files %}
                         <div class="tree-file" data-lib-name="{{ lf.name }}" onclick="openLibFile('{{ lf.name }}')" title="{{ lf.name }}">{{ lf.name }}</div>
                         {% endfor %}
                         {% if lib_data.plots_used or lib_data.plots_unused %}
-                        <details open>
+                        <details>
                             <summary>
                                 <span class="tree-label">plots/ · used here</span>
                                 <span class="tree-count">{{ lib_data.plots_used | length }}</span>
@@ -1044,8 +1138,16 @@ body.splitter-dragging * { user-select: none !important; }
          data-tags="{{ card.tags | join(',') }}"
          id="card-{{ card.slug }}">
 
-        <div class="card-header" onclick="toggleCard(this)">
-            <span class="card-title"><span class="card-collapse-icon">&#9660;</span>{{ card.title }}</span>
+        <div class="card-header" onclick="toggleCard(this, event)">
+            <div class="card-header-left">
+                <span class="card-title"><span class="card-collapse-icon">&#9660;</span>{{ card.title }}</span>
+                <div class="card-order-controls" onclick="event.stopPropagation()">
+                    <button type="button" class="card-order-btn" data-action="top"    title="Send to top of slice"    onclick="moveCard(this, 'top')">&#x2912;</button>
+                    <button type="button" class="card-order-btn" data-action="up"     title="Move up one slot"        onclick="moveCard(this, 'up')">&#x2191;</button>
+                    <button type="button" class="card-order-btn" data-action="down"   title="Move down one slot"      onclick="moveCard(this, 'down')">&#x2193;</button>
+                    <button type="button" class="card-order-btn" data-action="bottom" title="Send to bottom of slice" onclick="moveCard(this, 'bottom')">&#x2913;</button>
+                </div>
+            </div>
             <div class="card-badges">
                 {% if card.is_pipeline %}<span class="badge badge-pipeline" title="Pipeline node (transform)">pipeline</span>{% endif %}
                 {% if card.figure_id %}<span class="badge badge-figure-id">{{ card.figure_id }}</span>{% endif %}
@@ -1604,7 +1706,9 @@ function saveNotes(slug) {
 }
 
 /* ── Collapsible cards ─────────────────────────────────── */
-function toggleCard(header) {
+function toggleCard(header, evt) {
+    // Modifier-clicks route to the selection system instead of toggling collapse.
+    if (evt && (evt.shiftKey || evt.metaKey || evt.ctrlKey)) return;
     header.closest('.card').classList.toggle('collapsed');
 }
 
@@ -1732,9 +1836,13 @@ function setGroup(slug, newGroup, label) {
         newSub.addEventListener('drop', e => {
             e.preventDefault();
             clearDragIndicators();
-            if (!draggedCard) return;
-            newSub.parentNode.insertBefore(draggedCard, newSub.nextElementSibling);
-            handleGroupChange(draggedCard, newGroup);
+            if (!draggedCard || !draggedSet) return;
+            let anchor = newSub;
+            for (const c of draggedSet) {
+                newSub.parentNode.insertBefore(c, anchor.nextElementSibling);
+                anchor = c;
+                handleGroupChange(c, newGroup);
+            }
             saveCardOrder();
         });
     }
@@ -1755,11 +1863,18 @@ function setGroup(slug, newGroup, label) {
     }
 
     // Save to server (handles both meta.yaml and registry)
+    window.__lastOwnOrderWriteAt = Date.now();
     fetch('/api/meta/' + slug, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ group: newGroup }),
     }).catch(() => {});
+
+    // Refresh per-card order-button disabled states — the card just changed
+    // groups, so both the old and new group's slices need re-evaluation.
+    if (typeof updateAllOrderButtonDisabledStates === 'function') {
+        updateAllOrderButtonDisabledStates();
+    }
 }
 
 /* ── Tag editing ───────────────────────────────────────── */
@@ -1992,6 +2107,7 @@ expandAll = function() { _origExpandAll(); saveCollapseState(); };
 /* ── Drag-and-drop reordering ──────────────────────────── */
 const ORDER_KEY = 'labdash-card-order';
 let draggedCard = null;
+let draggedSet = null;  // cards being dragged (single card or multi-selection)
 let isLiveMode = false; // overridden by live mode script
 
 function buildOrderFromDOM() {
@@ -2021,21 +2137,37 @@ function initDragAndDrop() {
 
         card.addEventListener('dragstart', e => {
             draggedCard = card;
-            card.classList.add('dragging');
+            // If the dragged card is part of a multi-card selection, drag the
+            // whole selection as a block. Otherwise, drag just this card.
+            const sel = (typeof SelectionState !== 'undefined') ? SelectionState : null;
+            if (sel && sel.selectedSlugs.has(card.dataset.slug) && sel.selectedSlugs.size > 1) {
+                // Collect selected cards in current DOM order so they keep
+                // their relative ordering after the drop.
+                draggedSet = [];
+                document.querySelectorAll('.main .card').forEach(c => {
+                    if (sel.selectedSlugs.has(c.dataset.slug)) draggedSet.push(c);
+                });
+            } else {
+                draggedSet = [card];
+            }
+            draggedSet.forEach(c => c.classList.add('dragging'));
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', card.dataset.slug);
         });
 
         card.addEventListener('dragend', () => {
-            card.classList.remove('dragging');
+            if (draggedSet) {
+                draggedSet.forEach(c => c.classList.remove('dragging'));
+            }
             clearDragIndicators();
             draggedCard = null;
+            draggedSet = null;
         });
 
         card.addEventListener('dragover', e => {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
-            if (draggedCard && draggedCard !== card) {
+            if (draggedCard && !(draggedSet && draggedSet.includes(card))) {
                 clearDragIndicators();
                 card.classList.add('drag-over');
             }
@@ -2048,14 +2180,18 @@ function initDragAndDrop() {
         card.addEventListener('drop', e => {
             e.preventDefault();
             clearDragIndicators();
-            if (!draggedCard || draggedCard === card) return;
+            if (!draggedCard || !draggedSet) return;
+            // Drop onto a card that's part of the dragged set → no-op.
+            if (draggedSet.includes(card)) return;
 
-            // Insert dragged card before drop target
-            card.parentNode.insertBefore(draggedCard, card);
-
-            // Update group: card joins the drop target's group
+            // Insert each dragged card before the drop target, in their
+            // selection order. Each insertBefore lands directly to the left
+            // of the target, producing [d0, d1, ..., target].
             const newGroup = card.dataset.group;
-            handleGroupChange(draggedCard, newGroup);
+            for (const c of draggedSet) {
+                card.parentNode.insertBefore(c, card);
+                handleGroupChange(c, newGroup);
+            }
             saveCardOrder();
         });
     });
@@ -2078,14 +2214,18 @@ function initDragAndDrop() {
         sub.addEventListener('drop', e => {
             e.preventDefault();
             clearDragIndicators();
-            if (!draggedCard) return;
+            if (!draggedCard || !draggedSet) return;
 
-            // Insert dragged card right after the subtitle (first position in group)
-            sub.parentNode.insertBefore(draggedCard, sub.nextElementSibling);
-
-            // Update group: card joins the subtitle's group
+            // Drop onto a group subtitle = first positions in that group.
+            // Insert dragged cards immediately after the subtitle, in order,
+            // by tracking the most recent insertion as the anchor.
             const newGroup = sub.dataset.group;
-            handleGroupChange(draggedCard, newGroup);
+            let anchor = sub;
+            for (const c of draggedSet) {
+                sub.parentNode.insertBefore(c, anchor.nextElementSibling);
+                anchor = c;
+                handleGroupChange(c, newGroup);
+            }
             saveCardOrder();
         });
     });
@@ -2132,15 +2272,36 @@ function updateSidebarGroupCounts() {
     });
 }
 
+// Serialize order PATCHes so rapid clicks can't race on the server side.
+// FastAPI's thread pool can process concurrent PUTs in arbitrary order; with
+// no locking on the registry file, the final write could be a stale one.
+// Chaining via this promise guarantees server-side write order matches click
+// order. Each call also captures the DOM snapshot at click time (not at fetch
+// time), so the payload reflects the user's intended state when they clicked.
+let _orderPatchChain = Promise.resolve();
+
 function saveCardOrder() {
     /* Save current order. In live mode, posts to API. In static mode, uses localStorage. */
+    // Refresh per-card order-button disabled states so a drag-and-drop or
+    // button-driven reorder both leave the buttons in sync with DOM position.
+    if (typeof updateAllOrderButtonDisabledStates === 'function') {
+        updateAllOrderButtonDisabledStates();
+    }
     if (isLiveMode) {
+        // Mark this as our own write so the SSE echo can be suppressed.
+        // Window-level var; the live-mode SSE handlers read it.
+        window.__lastOwnOrderWriteAt = Date.now();
         const groups = buildOrderFromDOM();
-        fetch('/api/registry/order', {
-            method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ groups }),
-        }).catch(() => {
+        _orderPatchChain = _orderPatchChain.then(() =>
+            fetch('/api/registry/order', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ groups }),
+            }).then(() => {
+                // Keep the cooldown window alive while writes are still flowing.
+                window.__lastOwnOrderWriteAt = Date.now();
+            })
+        ).catch(() => {
             // Fall back to localStorage if server unreachable
             _saveCardOrderLocal();
         });
@@ -2182,8 +2343,343 @@ function resetCardOrder() {
     location.reload();
 }
 
+/* ── Slice-aware ordering: per-card move buttons + multi-select ──── */
+/* The pure-function core (`computeNewOrder`, `resolveRange`) is
+   mirrored in `labdash/_slice_order.py` for testing. Keep the two in
+   sync — change both together. */
+
+const SelectionState = {
+    selectedSlugs: new Set(),
+    anchorSlug: null,
+};
+
+function buildOrderModel() {
+    // Query the DOM in current order. `cardArray` is a snapshot of initial
+    // DOM order and goes stale after any reorder.
+    const result = [];
+    document.querySelectorAll('.main .card').forEach(c => {
+        result.push({
+            slug: c.dataset.slug,
+            group: c.dataset.group,
+            visible: c.style.display !== 'none',
+        });
+    });
+    return result;
+}
+
+function computeNewOrder(selectedSlugs, action, model) {
+    /* Pure function. selectedSlugs: iterable of slug strings.
+       action: 'top' | 'up' | 'down' | 'bottom'.
+       model: [{slug, group, visible}, ...] in current DOM order.
+       Returns: array of slugs in the new DOM order. */
+    const selectedSet = new Set(selectedSlugs);
+    const groupOrder = [];
+    const groupCards = new Map();
+    for (const c of model) {
+        if (!groupCards.has(c.group)) {
+            groupOrder.push(c.group);
+            groupCards.set(c.group, []);
+        }
+        groupCards.get(c.group).push(c);
+    }
+
+    function reorderSlice(slice) {
+        const sliceSlugs = slice.map(c => c.slug);
+        const selectedInSlice = sliceSlugs.filter(s => selectedSet.has(s));
+        if (selectedInSlice.length === 0) return sliceSlugs;
+        if (action === 'top') {
+            return [...selectedInSlice, ...sliceSlugs.filter(s => !selectedSet.has(s))];
+        }
+        if (action === 'bottom') {
+            return [...sliceSlugs.filter(s => !selectedSet.has(s)), ...selectedInSlice];
+        }
+        if (action === 'up') {
+            const out = [...sliceSlugs];
+            for (let i = 0; i < out.length; i++) {
+                if (!selectedSet.has(out[i])) continue;
+                let j = i - 1;
+                while (j >= 0 && selectedSet.has(out[j])) j--;
+                if (j < 0) continue;
+                [out[j], out[i]] = [out[i], out[j]];
+            }
+            return out;
+        }
+        if (action === 'down') {
+            const out = [...sliceSlugs];
+            for (let i = out.length - 1; i >= 0; i--) {
+                if (!selectedSet.has(out[i])) continue;
+                let j = i + 1;
+                while (j < out.length && selectedSet.has(out[j])) j++;
+                if (j >= out.length) continue;
+                [out[j], out[i]] = [out[i], out[j]];
+            }
+            return out;
+        }
+        return sliceSlugs;
+    }
+
+    const result = [];
+    for (const group of groupOrder) {
+        const cards = groupCards.get(group);
+        const slice = cards.filter(c => c.visible);
+        const newSliceSlugs = reorderSlice(slice);
+        // Stitch hidden cards back into their original slots; visible slots
+        // take the reordered slice in order.
+        let visibleIdx = 0;
+        for (const c of cards) {
+            if (!c.visible) {
+                result.push(c.slug);
+            } else {
+                result.push(newSliceSlugs[visibleIdx]);
+                visibleIdx++;
+            }
+        }
+    }
+    return result;
+}
+
+function resolveRange(anchorSlug, targetSlug, model) {
+    /* Pure function. Returns visible slugs from anchor to target inclusive,
+       in DOM order. If anchor isn't visible, falls back to just the target. */
+    const visibleSlugs = model.filter(c => c.visible).map(c => c.slug);
+    const idxA = visibleSlugs.indexOf(anchorSlug);
+    const idxB = visibleSlugs.indexOf(targetSlug);
+    if (idxB === -1) return [];
+    if (idxA === -1) return [targetSlug];
+    const lo = Math.min(idxA, idxB);
+    const hi = Math.max(idxA, idxB);
+    return visibleSlugs.slice(lo, hi + 1);
+}
+
+// Expose internals for browser-console debugging / future tests.
+window.__sliceOrderInternals__ = { computeNewOrder, resolveRange, buildOrderModel };
+
+function setSelection(slugs, newAnchor) {
+    SelectionState.selectedSlugs = new Set(slugs);
+    SelectionState.anchorSlug = newAnchor;
+    cardArray.forEach(c => {
+        c.classList.toggle('selected', SelectionState.selectedSlugs.has(c.dataset.slug));
+    });
+    const chip = document.getElementById('selectionChip');
+    const count = SelectionState.selectedSlugs.size;
+    if (count > 0) {
+        document.getElementById('selectionChipCount').textContent =
+            count + ' selected';
+        chip.classList.add('visible');
+    } else {
+        chip.classList.remove('visible');
+    }
+}
+
+function clearSelection() { setSelection(new Set(), null); }
+
+function handleCardClick(card, evt) {
+    const slug = card.dataset.slug;
+    if (evt.shiftKey && !evt.metaKey && !evt.ctrlKey) {
+        if (SelectionState.anchorSlug === null) {
+            setSelection(new Set([slug]), slug);
+        } else {
+            const range = resolveRange(SelectionState.anchorSlug, slug, buildOrderModel());
+            setSelection(new Set(range), SelectionState.anchorSlug);
+        }
+    } else if (evt.metaKey || evt.ctrlKey) {
+        const next = new Set(SelectionState.selectedSlugs);
+        if (next.has(slug)) next.delete(slug);
+        else next.add(slug);
+        setSelection(next, slug);
+    }
+}
+
+function moveCard(buttonEl, action) {
+    const card = buttonEl.closest('.card');
+    if (!card) return;
+    const slug = card.dataset.slug;
+
+    // If this card is part of a multi-card selection, operate on the whole
+    // selection. Otherwise, operate on just this card and leave any existing
+    // selection state untouched (the user may want to keep that selection
+    // for the next move).
+    const movingSlugs =
+        SelectionState.selectedSlugs.has(slug) && SelectionState.selectedSlugs.size > 1
+            ? SelectionState.selectedSlugs
+            : new Set([slug]);
+
+    const model = buildOrderModel();
+    const newOrder = computeNewOrder(movingSlugs, action, model);
+    applyMovesWithFlip(newOrder, slug);  // scroll to the clicked card after move
+}
+
+// FLIP duration in ms — must match the CSS transition on .flip-animating.
+const FLIP_DURATION_MS = 180;
+// Animation lock — blocks new moves while a FLIP is in progress so rapid
+// clicks can't stack visually-overlapping animations or race the SSE echo.
+let _flipLockUntil = 0;
+function _isFlipLocked() { return Date.now() < _flipLockUntil; }
+
+function applyMovesWithFlip(newOrder, scrollFocusSlug) {
+    const container = document.querySelector('.main');
+
+    // If a previous FLIP is still running, reject this click.
+    if (_isFlipLocked()) return false;
+
+    // FLIP "First": record current top of every card.
+    const oldTops = new Map();
+    cardArray.forEach(c => oldTops.set(c.dataset.slug, c.getBoundingClientRect().top));
+
+    // Apply DOM mutations group-by-group. Each group's subtitle anchors its
+    // cards, which must appear immediately after it. We trust newOrder to keep
+    // cards in the same group contiguous (computeNewOrder guarantees this).
+    let i = 0;
+    let anyMoved = false;
+    while (i < newOrder.length) {
+        const firstSlug = newOrder[i];
+        const firstCard = document.getElementById('card-' + firstSlug);
+        if (!firstCard) { i++; continue; }
+        const group = firstCard.dataset.group;
+        // Find the subtitle for this group
+        let subtitle = null;
+        document.querySelectorAll('.group-subtitle').forEach(s => {
+            if (s.dataset.group === group) subtitle = s;
+        });
+        if (!subtitle) { i++; continue; }
+        let anchor = subtitle;
+        while (i < newOrder.length) {
+            const card = document.getElementById('card-' + newOrder[i]);
+            if (!card || card.dataset.group !== group) break;
+            const expectedNext = anchor.nextElementSibling;
+            if (card !== expectedNext) {
+                container.insertBefore(card, expectedNext);
+                anyMoved = true;
+            }
+            anchor = card;
+            i++;
+        }
+    }
+
+    if (!anyMoved) return false;
+
+    // FLIP "Last + Invert + Play": animate each card from its old position.
+    const movedCards = [];
+    cardArray.forEach(c => {
+        const oldTop = oldTops.get(c.dataset.slug);
+        const newTop = c.getBoundingClientRect().top;
+        const deltaY = oldTop - newTop;
+        if (Math.abs(deltaY) < 0.5) return;
+        c.style.transform = 'translateY(' + deltaY + 'px)';
+        movedCards.push(c);
+    });
+    // Force layout flush so the inverted transform is applied before the transition kicks in.
+    if (movedCards.length > 0) container.offsetHeight;
+
+    // Engage the lock for the duration of the FLIP. Released by setTimeout
+    // rather than transitionend so a missed event can't deadlock the UI.
+    if (movedCards.length > 0) {
+        _flipLockUntil = Date.now() + FLIP_DURATION_MS + 40;  // small buffer
+    }
+
+    requestAnimationFrame(() => {
+        movedCards.forEach(c => {
+            c.classList.add('flip-animating');
+            c.style.transform = '';
+            c._flipEndListener = (e) => {
+                if (e.propertyName !== 'transform') return;
+                c.classList.remove('flip-animating');
+                c.removeEventListener('transitionend', c._flipEndListener);
+                c._flipEndListener = null;
+            };
+            c.addEventListener('transitionend', c._flipEndListener);
+        });
+    });
+
+    saveCardOrder();  // also refreshes disabled states (see saveCardOrder)
+
+    // Defer scroll until the FLIP completes so the viewport doesn't snap to
+    // the new layout position while the card is still visually at its old
+    // position. The user sees the card slide first, then the viewport follows.
+    if (scrollFocusSlug) {
+        setTimeout(() => {
+            const focusCard = document.getElementById('card-' + scrollFocusSlug);
+            if (focusCard) {
+                focusCard.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            }
+        }, FLIP_DURATION_MS + 20);
+    }
+    return true;
+}
+
+function getVisibleCardsInSliceOf(card) {
+    // Query the DOM in current order. `cardArray` is a snapshot of initial
+    // DOM order and goes stale after any reorder, so we cannot use it here.
+    const group = card.dataset.group;
+    const container = card.parentNode;
+    if (!container) return [card];
+    const result = [];
+    container.querySelectorAll('.card').forEach(c => {
+        if (c.dataset.group === group && c.style.display !== 'none') {
+            result.push(c);
+        }
+    });
+    return result;
+}
+
+function updateAllOrderButtonDisabledStates() {
+    cardArray.forEach(card => {
+        const controls = card.querySelector('.card-order-controls');
+        if (!controls) return;
+        const slice = getVisibleCardsInSliceOf(card);
+        const isVisible = card.style.display !== 'none';
+        const idx = slice.indexOf(card);
+        const atTop = !isVisible || idx <= 0;
+        const atBottom = !isVisible || idx >= slice.length - 1;
+        const solo = slice.length <= 1;
+        const setDisabled = (action, disabled) => {
+            const btn = controls.querySelector('[data-action="' + action + '"]');
+            if (btn) btn.disabled = disabled;
+        };
+        setDisabled('top',    atTop || solo);
+        setDisabled('up',     atTop || solo);
+        setDisabled('down',   atBottom || solo);
+        setDisabled('bottom', atBottom || solo);
+    });
+}
+
+function initSlicedOrdering() {
+    // Capture-phase global click listener — intercepts modifier-clicks anywhere
+    // on a card (except inside order controls / the chip) and routes them to
+    // the selection system, preventing the native click handler from firing.
+    document.addEventListener('click', (e) => {
+        if (!e.shiftKey && !e.metaKey && !e.ctrlKey) return;
+        const card = e.target.closest('.card');
+        if (!card) return;
+        if (e.target.closest('.card-order-controls, .selection-chip')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        handleCardClick(card, e);
+    }, true);
+
+    // Plain click anywhere off cards (sidebar, header, background, etc.)
+    // clears the selection. Clicks on the chip itself or its Clear button
+    // are excluded (Clear handles itself; clicks inside chip shouldn't
+    // re-clear via this path).
+    document.addEventListener('click', (e) => {
+        if (e.shiftKey || e.metaKey || e.ctrlKey) return;
+        if (e.target.closest('.card, .selection-chip')) return;
+        if (SelectionState.selectedSlugs.size > 0) clearSelection();
+    });
+
+    updateAllOrderButtonDisabledStates();
+}
+
+// Hook applyFilters so disabled states refresh on filter changes.
+const _origApplyFilters = applyFilters;
+applyFilters = function() {
+    _origApplyFilters();
+    updateAllOrderButtonDisabledStates();
+};
+
 initDragAndDrop();
 updateGroupSubtitles();
+initSlicedOrdering();
 
 /* ── Collection title editing ────────────────────────── */
 function editCollectionTitle() {

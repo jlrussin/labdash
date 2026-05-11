@@ -554,3 +554,46 @@ drag-and-drop.
 stale analyses. To rerun, click Run on a card, Run All Stale, or
 invoke `labdash build --only-stale` from a terminal. Auto-run is a
 separate (future) feature.
+
+## 16. Slice-aware manual ordering (per-card buttons + bulk select)
+
+Every card carries four small ordering buttons in its header
+(`⤒ ↑ ↓ ⤓`), muted at idle and brightening on card hover. They move
+the card within its **slice** — the visible subset of its group under
+the current filters (group filter + status filter + tag filter +
+search). The slice is computed live: filter by a tag and `⤒` sends a
+card to the top of *what's visible*, not the absolute top of the group.
+
+* `⤒` — send to top of slice
+* `↑` — move up one slot in the slice
+* `↓` — move down one slot
+* `⤓` — send to bottom of slice
+
+Buttons that would be no-ops are greyed out (`disabled`). Cards
+at the top of their slice have `⤒` and `↑` disabled; cards at the
+bottom have `⤓` and `↓` disabled. Single-card slices have all four
+disabled.
+
+**These buttons stay within-group.** To move a card to a different
+group, use drag-and-drop or edit `registry.yaml` directly — both
+already-supported affordances. The buttons never cross group
+boundaries.
+
+**Bulk selection.** Shift-click a card to range-select from the
+current anchor; Cmd/Ctrl-click toggles a single card in the
+selection. Selected cards show a strong blue ring; a count chip in
+the top-right corner shows the active count and a Clear button.
+Clicking outside any card (in the main content area) clears the
+selection. Click any move button on a selected card, and the action
+applies to every selected card — each within its own group's slice,
+preserving their relative DOM order for `⤒` / `⤓`.
+
+**Persistence.** Like drag-and-drop, each move PUTs to
+`/api/registry/order`; the file watcher echoes back a `card_order`
+SSE event, which the originating client absorbs idempotently (no
+visible re-shuffle). Other open viewers see the change live.
+
+**Algorithm parity.** The slice math is duplicated in two places:
+`labdash/_slice_order.py` (Python, exercised by `tests/test_slice_ordering.py`)
+and the `computeNewOrder` / `resolveRange` block inside
+`labdash/templates/index.html`. Change one, change the other.

@@ -1423,19 +1423,37 @@ window.reloadData = async function() {
         catch(err) { console.warn(err); }
     });
 
+    // Suppress order-event SSE that's an echo of our own recent write.
+    // Without this, rapid local reorders generate SSE events that, when they
+    // arrive at this client late, can revert the user's later moves.
+    // 800ms ≈ watcher debounce (200ms) + file IO + SSE roundtrip, with margin.
+    const OWN_ORDER_WRITE_COOLDOWN_MS = 800;
+    function isOwnOrderEcho() {
+        const t = window.__lastOwnOrderWriteAt || 0;
+        return (Date.now() - t) < OWN_ORDER_WRITE_COOLDOWN_MS;
+    }
+
     es.addEventListener('card_moved', e => {
+        if (isOwnOrderEcho()) return;
         try {
             const d = JSON.parse(e.data);
             const ok = window.applyGroupChange(d.slug, d.new_group, d.group_label, d.before_slug);
             if (!ok) location.reload();
+            if (typeof updateAllOrderButtonDisabledStates === 'function') {
+                updateAllOrderButtonDisabledStates();
+            }
         } catch(err) { console.warn(err); location.reload(); }
     });
 
     es.addEventListener('card_order', e => {
+        if (isOwnOrderEcho()) return;
         try {
             const d = JSON.parse(e.data);
             const ok = window.applyCardOrder(d.group, d.slugs);
             if (!ok) location.reload();
+            if (typeof updateAllOrderButtonDisabledStates === 'function') {
+                updateAllOrderButtonDisabledStates();
+            }
         } catch(err) { console.warn(err); }
     });
 
