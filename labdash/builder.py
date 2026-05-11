@@ -1,6 +1,5 @@
 """Generates static HTML dashboard from analysis outputs."""
 
-import ast
 import os
 import base64
 import json
@@ -21,6 +20,11 @@ from .runner import (
     is_stale,
     transitive_deps,
     _resolve_run_order,
+)
+from .lib_graph import (
+    parse_lib_imports,
+    build_lib_graph,
+    transitive_lib_closure,
 )
 
 
@@ -50,47 +54,14 @@ def _highlight_python(code: str) -> str:
     return highlight(code, PythonLexer(), HtmlFormatter(nowrap=True, style=PYGMENTS_STYLE))
 
 
-def _parse_wrapper_imports(analysis_path: Path) -> list[str]:
-    """Return relative paths under _lib/ that this wrapper imports.
+def _parse_wrapper_imports(analysis_path: Path, lib_dir: Path) -> list[str]:
+    """Return relative paths under `_lib/` that this wrapper directly imports.
 
-    Parses the AST of a wrapper's analysis.py and collects imports from
-    the `_lib` package. Returns paths like "plots/sde_accuracy.py" or
-    "pipeline_steps.py" (POSIX separators, relative to _lib/).
-
-    Only modules resolvable to a concrete file are returned (not package
-    imports like `from _lib import style`). Parse errors return [].
+    Thin wrapper around `lib_graph.parse_lib_imports`; returns a deterministic
+    sorted list. Raises `LibImportError` on star imports, dynamic imports, or
+    parse errors (strict-mandate enforcement).
     """
-    try:
-        tree = ast.parse(analysis_path.read_text())
-    except (SyntaxError, OSError):
-        return []
-
-    found: list[str] = []
-    seen: set[str] = set()
-
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            mod = node.module or ""
-            # `from _lib.plots.sde_accuracy import make`
-            # `from _lib.pipeline import load_pickle`
-            if mod == "_lib" or not mod.startswith("_lib."):
-                continue
-            # Strip "_lib." prefix; convert dots to "/"; append ".py".
-            rel = mod[len("_lib."):].replace(".", "/") + ".py"
-            if rel not in seen:
-                seen.add(rel)
-                found.append(rel)
-        elif isinstance(node, ast.Import):
-            # `import _lib.plots.sde_accuracy` (rare but handle)
-            for alias in node.names:
-                name = alias.name
-                if name == "_lib" or not name.startswith("_lib."):
-                    continue
-                rel = name[len("_lib."):].replace(".", "/") + ".py"
-                if rel not in seen:
-                    seen.add(rel)
-                    found.append(rel)
-    return found
+    return sorted(parse_lib_imports(analysis_path, lib_dir=lib_dir))
 
 
 def _resolve_lib_dir(analyses_dir: Path) -> Path | None:
@@ -127,9 +98,11 @@ def build_card_data(
     code = analysis["analysis_path"].read_text()
     code_highlighted = _highlight_python(code)
 
-    # Shared modules imported by this wrapper (read source, highlight, annotate)
+    # Shared modules imported by this wrapper (read source, highlight, annotate).
+    # Tabs show DIRECT imports only — staleness is computed against the
+    # transitive closure (stored separately on the analysis dict).
     shared_modules: list[dict] = []
-    shared_rel = analysis.get("shared_paths", [])
+    shared_rel = analysis.get("direct_shared_paths") or analysis.get("shared_paths", [])
     if lib_dir is not None:
         for rel in shared_rel:
             src = lib_dir / rel
@@ -316,19 +289,23 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
     by_slug = {a["slug"]: a for a in analyses}
     lib_dir = _resolve_lib_dir(analyses_dir)
 
-    # Parse wrapper imports once; attach shared_paths to each analysis dict so
-    # staleness checks and card-data rendering use a single source of truth.
+    # Build the _lib import graph once; compute each wrapper's transitive
+    # closure for staleness, but track DIRECT imports separately for UI
+    # surfaces (per-card "shared code" tabs and the "used by N wrappers" badge
+    # in the sidebar).
+    lib_graph = build_lib_graph(lib_dir) if lib_dir is not None else {}
+
     used_by: dict[str, list[str]] = {}
     for a in analyses:
-        rels = _parse_wrapper_imports(a["analysis_path"])
-        # Keep only imports that resolve to an existing file under _lib/.
-        resolved: list[str] = []
-        if lib_dir is not None:
-            for rel in rels:
-                if (lib_dir / rel).is_file():
-                    resolved.append(rel)
-        a["shared_paths"] = resolved
-        for rel in resolved:
+        if lib_dir is None:
+            a["direct_shared_paths"] = []
+            a["shared_paths"] = []
+            continue
+        direct = parse_lib_imports(a["analysis_path"], lib_dir=lib_dir)
+        transitive = transitive_lib_closure(direct, lib_graph)
+        a["direct_shared_paths"] = sorted(direct)
+        a["shared_paths"] = sorted(transitive)  # consumed by is_stale
+        for rel in direct:
             used_by.setdefault(rel, []).append(a["slug"])
 
     used_by_count = {k: len(v) for k, v in used_by.items()}

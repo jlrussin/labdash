@@ -241,7 +241,17 @@ def main():
     if not args.command:
         parser.print_help()
         sys.exit(1)
-    args.func(args)
+    try:
+        args.func(args)
+    except Exception as e:
+        # Strict-mandate violations: surface the formatted message and exit
+        # cleanly instead of dumping a traceback. Imported lazily to keep
+        # `labdash --help` fast.
+        from .lib_graph import LibImportError
+        if isinstance(e, LibImportError):
+            print(f"\nlabdash: invalid import in _lib/:\n{e}", file=sys.stderr)
+            sys.exit(2)
+        raise
 
 
 if __name__ == "__main__":

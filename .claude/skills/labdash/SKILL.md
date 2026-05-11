@@ -334,6 +334,15 @@ def run(output_dir: Path) -> dict:
 
 ## 8. Working with `_lib/`
 
+### Import rules in `_lib/` (mandatory)
+
+LabDash's transitive staleness detector walks `_lib/` imports statically. For this to be correct, files in `_lib/` and wrappers that import from `_lib/` must use:
+
+- **Explicit imports only.** `from _lib.X import name1, name2` — never `from _lib.X import *`.
+- **Top-level absolute imports.** No `importlib.import_module(...)`, no `__import__(...)`, no conditional imports of `_lib/` modules inside functions or `try/except` blocks.
+
+Violations are caught at build time (`labdash build` / `labdash serve` / the in-browser shared-code editor) and abort with a `LibImportError` pointing at the file and line. The mandate exists so that editing any `_lib/` file — including transitively-imported leaves like `_lib/preprocessing.py` — reliably marks every dependent wrapper as stale.
+
 ### data_loading.py
 - Contains functions like `load_all_participants()`, `build_trial_dataframe()`
 - Returns DataFrames with a `participant_id` column for multi-participant analysis
@@ -478,9 +487,9 @@ tags:
 
 `labdash build` computes staleness **transitively**:
 
-- An analysis is self-stale if its `analysis.py` OR any `_lib/` file it imports is newer than its oldest output file (or if it has no outputs). `_lib/` imports are detected by static AST parse of the wrapper.
+- An analysis is self-stale if its `analysis.py` OR any `_lib/` file in its **transitive** import closure is newer than its oldest output file (or if it has no outputs). The closure is computed by static AST parse of the wrapper and every `_lib/*.py` it reaches; see "Import rules in `_lib/`" in §8 for the static-import mandate that makes this reliable.
 - An analysis is dep-stale if any upstream dependency's newest output is newer than this one's oldest output, or if any upstream is itself stale.
 
 Stale analyses are flagged with a red "stale" badge in the viewer. The **Run All Stale** button reruns only them, in topo order. Clicking **Run** on a single card runs any transitively-stale upstream before the target.
 
-**Implication for shared-plot edits.** Editing `_lib/plots/X.py` (via the in-viewer sidebar editor or directly on disk) automatically marks every wrapper that imports it as stale. The sidebar editor's Save response lists the affected slugs; the viewer adds stale badges to those cards without a reload.
+**Implication for shared-plot edits.** Editing `_lib/plots/X.py` — or any `_lib/` leaf that `X.py` itself imports (e.g. `_lib/preprocessing.py`) — automatically marks every wrapper that transitively imports it as stale. The sidebar editor's Save response lists the affected slugs; the viewer adds stale badges to those cards without a reload.

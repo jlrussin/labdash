@@ -281,10 +281,17 @@ def create_app(config: dict) -> FastAPI:
         Path-traversal-safe: the resolved target must stay inside _lib/.
         On success, clears _lib from sys.modules so the next run re-imports,
         returns the list of wrappers whose output is now stale because they
-        import this file, and the re-highlighted HTML so the client can
-        refresh in-card shared panes without losing Pygments colors.
+        TRANSITIVELY import this file, and the re-highlighted HTML so the
+        client can refresh in-card shared panes without losing Pygments
+        colors.
         """
-        from .builder import _resolve_lib_dir, _parse_wrapper_imports, _highlight_python
+        from .builder import _resolve_lib_dir, _highlight_python
+        from .lib_graph import (
+            LibImportError,
+            parse_lib_imports,
+            build_lib_graph,
+            transitive_lib_closure,
+        )
         lib_dir = _resolve_lib_dir(analyses_dir)
         if lib_dir is None:
             raise HTTPException(404, "_lib/ not found")
@@ -321,20 +328,33 @@ def create_app(config: dict) -> FastAPI:
         for k in [k for k in sys.modules if "_lib" in k]:
             del sys.modules[k]
 
-        # Find wrappers that import this file; they are now stale.
+        # Find wrappers that TRANSITIVELY import this file; they are now stale.
+        # Build the import graph fresh (reflects the just-saved file). If the
+        # new code introduces a non-static import anywhere in `_lib/`, surface
+        # the error to the client — the edit is already saved on disk, so
+        # refusing to compute stale slugs is the right tradeoff over rejecting
+        # the save.
         rel = update.path.replace("\\", "/")
         stale_slugs: list[str] = []
-        for a in discover_analyses(analyses_dir):
-            rels = _parse_wrapper_imports(a["analysis_path"])
-            if rel in rels:
-                stale_slugs.append(a["slug"])
+        lib_graph_error: str | None = None
+        try:
+            graph = build_lib_graph(lib_dir)
+            for a in discover_analyses(analyses_dir):
+                direct = parse_lib_imports(a["analysis_path"], lib_dir=lib_dir)
+                if rel in transitive_lib_closure(direct, graph):
+                    stale_slugs.append(a["slug"])
+        except LibImportError as e:
+            lib_graph_error = str(e)
 
-        return {
+        response: dict = {
             "status": "saved",
             "path": update.path,
             "stale_slugs": stale_slugs,
             "code_highlighted": _highlight_python(update.code),
         }
+        if lib_graph_error:
+            response["lib_graph_error"] = lib_graph_error
+        return response
 
     @app.get("/api/notes/{slug}")
     def get_notes(slug: str):

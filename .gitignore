@@ -6,3 +6,4 @@ build/
 .eggs/
 *.egg
 _output/
+.pytest_cache/

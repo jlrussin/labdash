@@ -225,14 +225,14 @@ def is_stale(
 
 
 def _shared_paths_abs(analysis: dict) -> list[Path]:
-    """Absolute paths of _lib/ files this wrapper imports.
+    """Absolute paths of `_lib/` files this wrapper TRANSITIVELY imports.
 
-    Prefers `analysis["shared_paths"]` (list of strings relative to _lib/,
-    normally attached by the builder). Falls back to parsing the wrapper's
-    AST on demand so pure runner paths (e.g. `labdash build --only-stale`
-    without a preceding builder pass) still pick up shared-file edits.
+    Prefers `analysis["shared_paths"]` (list of `_lib/`-relative strings,
+    normally attached by the builder as the transitive closure). Falls back
+    to building the import graph and computing the closure on demand so pure
+    runner paths (e.g. `labdash build --only-stale` without a preceding
+    builder pass) still propagate shared-file edits correctly.
     """
-    import ast as _ast
     # analyses_dir = analysis.py's grandparent
     analyses_dir = analysis["analysis_path"].parent.parent
     lib_dir: Path | None = None
@@ -245,28 +245,14 @@ def _shared_paths_abs(analysis: dict) -> list[Path]:
 
     rels = analysis.get("shared_paths")
     if rels is None:
-        rels = []
-        try:
-            tree = _ast.parse(analysis["analysis_path"].read_text())
-        except (SyntaxError, OSError):
-            return []
-        seen: set[str] = set()
-        for node in _ast.walk(tree):
-            mods: list[str] = []
-            if isinstance(node, _ast.ImportFrom):
-                if node.module and node.module.startswith("_lib."):
-                    mods.append(node.module)
-            elif isinstance(node, _ast.Import):
-                for alias in node.names:
-                    if alias.name.startswith("_lib."):
-                        mods.append(alias.name)
-            for mod in mods:
-                rel = mod[len("_lib."):].replace(".", "/") + ".py"
-                if rel in seen:
-                    continue
-                seen.add(rel)
-                if (lib_dir / rel).is_file():
-                    rels.append(rel)
+        from .lib_graph import (
+            parse_lib_imports,
+            build_lib_graph,
+            transitive_lib_closure,
+        )
+        graph = build_lib_graph(lib_dir)
+        direct = parse_lib_imports(analysis["analysis_path"], lib_dir=lib_dir)
+        rels = sorted(transitive_lib_closure(direct, graph))
         analysis["shared_paths"] = rels  # cache back
 
     return [lib_dir / rel for rel in rels]
