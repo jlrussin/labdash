@@ -665,33 +665,65 @@ body {
     transition: all 0.15s;
 }
 .img-action-btn:hover { background: var(--border-default); color: var(--text-primary); }
+/* ── Statistical tables ────────────────────────────────────
+   Pandas-generated tables (df.to_html) carry a border="1"
+   attribute and an inline text-align: right on the thead row.
+   The styling below overrides the legacy border attribute and
+   replaces the all-cell grid with horizontal-only dividers,
+   a sticky muted header, zebra striping, and tabular-nums
+   alignment for numeric columns. */
 .card-output-table-wrapper {
     overflow-x: auto;
     overflow-y: auto;
     max-height: 500px;
+    margin: 0.4rem 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg-surface);
 }
-.card-output table {
-    margin: 0 auto;
+.card-output table,
+.card-output table[border] {
+    margin: 0;
+    border: 0;
     border-collapse: collapse;
     font-size: 0.85rem;
     width: 100%;
     table-layout: auto;
+    color: var(--text-primary);
 }
-.card-output th {
-    padding: 0.4rem 0.8rem;
-    border: 1px solid var(--border-input);
-    text-align: left;
-    white-space: nowrap;
-}
+.card-output th,
 .card-output td {
-    padding: 0.4rem 0.8rem;
-    border: 1px solid var(--border-input);
+    padding: 0.55rem 0.9rem;
+    border: 0;
+    border-bottom: 1px solid var(--border-subtle);
     text-align: left;
+    /* Let pandas' inline text-align: right on a <tr> win for
+       numeric columns; left is just the default. */
+    vertical-align: top;
+}
+.card-output thead th {
+    background: var(--bg-subtle);
+    font-weight: 600;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-default);
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.card-output tbody td {
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
     word-wrap: break-word;
     overflow-wrap: break-word;
     max-width: 500px;
 }
-.card-output th { background: var(--bg-subtle); font-weight: 600; }
+.card-output tbody tr:nth-child(even) td { background: var(--bg-subtle); }
+.card-output tbody tr:last-child td      { border-bottom: 0; }
+.card-output tbody tr:hover td           { background: var(--accent-tint-soft); }
 .no-output {
     padding: 2rem;
     color: var(--text-faint-3);
