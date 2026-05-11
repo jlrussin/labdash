@@ -19,7 +19,8 @@ A modular analysis and visualization dashboard for scientific research, designed
 - [Viewer Features](#viewer-features)
 - [Shared Code (\_lib/)](#shared-code-_lib)
 - [Agent Interaction Model](#agent-interaction-model)
-- [Agent Notes and Change Log](#agent-notes-and-change-log)
+- [Using the LabDash Skill in Another Project](#using-the-labdash-skill-in-another-project)
+- [AGENT_CONTEXT.md and Change Log](#agent_contextmd-and-change-log)
 - [Data Source Configuration](#data-source-configuration)
 - [Publication Pipeline](#publication-pipeline)
 - [Safety](#safety)
@@ -562,6 +563,44 @@ LabDash is designed so that an AI coding agent can:
 - **Runnable in isolation** -- `python analysis.py` always works. No kernel state to manage.
 - **Verifiable output** -- the agent can check whether the expected output file exists after running.
 - **Aesthetic/logic separation** -- visual parameters at the top, computation below. An agent can adjust one without touching the other.
+
+---
+
+## Using the LabDash Skill in Another Project
+
+LabDash ships with a Claude Code skill at `.claude/skills/labdash/SKILL.md` (the same conventions documented in this README, formatted for an AI coding agent). To make the skill available to Claude Code when working in a different repository — e.g. a project whose analyses live under LabDash collections — symlink the skill directory into that project's `.claude/skills/`.
+
+Recommended layout — clone `labdash` as a sibling of the consumer project, both under a shared `projects/` parent:
+
+```
+projects/
+├── labdash_project/
+│   └── labdash/                              # clone of jlrussin/labdash
+│       └── .claude/skills/labdash/SKILL.md   # canonical skill
+└── my_project/                               # consumer project
+    └── .claude/skills/
+        └── labdash → ../../../labdash_project/labdash/.claude/skills/labdash
+```
+
+Setup:
+
+```bash
+# 1. Clone labdash next to your project
+cd projects/
+git clone https://github.com/jlrussin/labdash.git labdash_project/labdash
+
+# 2. Symlink the skill into your project's .claude/skills/
+mkdir -p my_project/.claude/skills
+ln -s ../../../labdash_project/labdash/.claude/skills/labdash \
+    my_project/.claude/skills/labdash
+
+# 3. Verify the symlink resolves
+ls -L my_project/.claude/skills/labdash/SKILL.md   # should print the path under labdash_project/
+```
+
+The number of `..` segments in the symlink target depends on how deeply nested your `.claude/skills/` directory is relative to the labdash clone. Adjust until `ls -L` resolves successfully.
+
+This is per-machine setup — symlinks aren't portable across git clones. Each collaborator runs the same `ln -s` after cloning both repos. For a self-bootstrapping alternative, vendor `labdash` into the consumer project as a git submodule and point the symlink at the submodule path; the consumer project's README should then pin the submodule revision so the skill version is reproducible.
 
 ---
 

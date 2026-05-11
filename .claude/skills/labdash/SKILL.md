@@ -72,7 +72,7 @@ if __name__ == "__main__":
 1. **Aesthetic variables at the top** in a clearly marked block between comment lines. Include: `FIGSIZE`, `TITLE`, labels, colors, `ALPHA`, marker sizes, line widths — anything the scientist might want to tweak visually. **Always include:**
    - **Layout/spacing**: `SUPTITLE_Y`, `TOP_MARGIN`, `HSPACE`, `WSPACE`, `LEGEND_LOC`, `LABEL_PAD`, `TITLE_PAD` — title/label overlap is the most common visual problem.
    - **Axis ranges**: `XLIM = None` and `YLIM = None` (or specific tuples like `(0, 1.05)`). When `None`, matplotlib auto-scales. The scientist can set explicit ranges without reading the plotting code.
-   - **Shared axis toggle**: For multi-panel plots comparing test types with different RT scales, include `SHARE_Y_AXIS = False`. When False, each subplot gets its own y-range (prevents ICL's high RTs from compressing IWL's scale).
+   - **Shared axis toggle**: For multi-panel plots whose panels have meaningfully different scales (e.g. one condition's response times much wider than another's), include `SHARE_Y_AXIS = False`. When False, each subplot gets its own y-range so a wider-scale panel doesn't compress the others.
 
 2. **`run(output_dir: Path) -> dict`** is the callable entry point. The runner imports and calls it. Returns a stats dict (saved as `stats.json` automatically).
 
