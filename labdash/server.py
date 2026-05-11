@@ -29,9 +29,24 @@ from .runner import (
     stale_only,
 )
 from .builder import build_dashboard
+from . import agent_context
 from .live_events import EventBus, is_shutdown
 from .live_translator import LiveTranslator
 from .watcher import FileWatcher
+
+
+def _sync_agent_context_safe(analyses_dir: Path) -> None:
+    """Call `agent_context.sync()` and log+swallow any failure.
+
+    Used at server callsites where a sync failure must not crash the
+    request or the live-mode watcher. Build-path callers should call
+    `agent_context.sync()` directly and let errors propagate.
+    """
+    try:
+        agent_context.sync(analyses_dir)
+    except Exception:
+        import traceback
+        traceback.print_exc()
 
 
 class CodeUpdate(BaseModel):
@@ -167,6 +182,7 @@ def create_app(config: dict) -> FastAPI:
         except Exception:
             import traceback
             traceback.print_exc()
+        _sync_agent_context_safe(analyses_dir)
         watcher.start()
         try:
             yield
@@ -461,6 +477,9 @@ def create_app(config: dict) -> FastAPI:
             # Tags or other metadata changed — sync registry for tags
             _sync_registry(analyses_dir)
 
+        if changes:
+            _sync_agent_context_safe(analyses_dir)
+
         return {"status": "saved", "slug": slug, "updated": updated}
 
     # ── Registry endpoints ────────────────────────────────
@@ -536,6 +555,8 @@ def create_app(config: dict) -> FastAPI:
         with open(registry_path, "w") as f:
             yaml.dump(new_registry, f, default_flow_style=False, sort_keys=False)
 
+        _sync_agent_context_safe(analyses_dir)
+
         return {"status": "saved", "group_changes": len(group_changes)}
 
     @app.patch("/api/registry/agent-notes")
@@ -551,6 +572,8 @@ def create_app(config: dict) -> FastAPI:
 
         with open(registry_path, "w") as f:
             yaml.dump(registry, f, default_flow_style=False, sort_keys=False)
+
+        _sync_agent_context_safe(analyses_dir)
 
         return {"status": "saved"}
 

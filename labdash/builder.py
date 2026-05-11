@@ -21,6 +21,7 @@ from .runner import (
     transitive_deps,
     _resolve_run_order,
 )
+from . import agent_context
 from .lib_graph import (
     parse_lib_imports,
     build_lib_graph,
@@ -121,11 +122,6 @@ def build_card_data(
     notes_raw = _read_file(notes_path)
     notes_html = markdown.markdown(notes_raw) if notes_raw else None
 
-    # Read agent notes
-    agent_notes_path = analysis["dir"] / "agent_notes.md"
-    agent_notes_raw = _read_file(agent_notes_path)
-    agent_notes_html = markdown.markdown(agent_notes_raw) if agent_notes_raw else None
-
     # Read stats
     stats_path = slug_output / "stats.json"
     stats = json.loads(stats_path.read_text()) if stats_path.exists() else None
@@ -174,7 +170,6 @@ def build_card_data(
         "lineage": lineage,
         "notes_raw": notes_raw or "",
         "notes_html": notes_html,
-        "agent_notes_html": agent_notes_html,
         "stats": stats,
         "output_image": output_image,
         "output_table_html": output_table_html,
@@ -284,6 +279,7 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
     """Generate the static HTML dashboard. Returns path to index.html."""
     # Sync registry first (handles migration, adds new analyses, removes deleted)
     _sync_registry(analyses_dir)
+    agent_context.sync(analyses_dir)
 
     analyses = ordered_analyses(analyses_dir)
     by_slug = {a["slug"]: a for a in analyses}

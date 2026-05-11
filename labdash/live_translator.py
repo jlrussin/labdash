@@ -35,6 +35,7 @@ from typing import Any
 
 import yaml
 
+from . import agent_context
 from .builder import _highlight_python, _resolve_lib_dir
 from .lib_graph import (
     LibImportError,
@@ -242,6 +243,13 @@ class LiveTranslator:
                 # Last-ditch: don't let translator bugs hang the watcher.
                 import traceback
                 traceback.print_exc()
+
+            if change.kind in ("meta", "registry"):
+                try:
+                    agent_context.sync(self.analyses_dir)
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
 
     # ── per-kind handlers ─────────────────────────────────────────────
 

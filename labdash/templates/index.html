@@ -484,23 +484,6 @@ body {
     padding-top: 0.4rem;
 }
 
-/* Agent notes */
-.agent-notes-expandable .expandable-body {
-    background: #f8f8fc;
-}
-.agent-notes-header-label {
-    color: #7c7ca8;
-    font-style: italic;
-}
-.agent-notes-content {
-    font-size: 0.8rem;
-    line-height: 1.5;
-    color: #777;
-    font-family: "SF Mono", "Fira Code", monospace;
-}
-.agent-notes-content ul { padding-left: 1.2rem; }
-.agent-notes-content li { margin-bottom: 0.3rem; }
-
 /* Tags (main rules in hover-visible section below) */
 .tag {
     padding: 0.1rem 0.4rem;
@@ -1292,18 +1275,6 @@ body.splitter-dragging * { user-select: none !important; }
                 </div>
             </div>
         </div>
-
-        {% if card.agent_notes_html %}
-        <div class="expandable agent-notes-expandable" id="agent-notes-{{ card.slug }}">
-            <div class="expandable-header" onclick="toggleExpand(this)">
-                <span class="agent-notes-header-label">Agent Notes</span>
-                <span class="arrow">&#9654;</span>
-            </div>
-            <div class="expandable-body">
-                <div class="agent-notes-content">{{ card.agent_notes_html }}</div>
-            </div>
-        </div>
-        {% endif %}
 
         <div class="card-tags" data-slug="{{ card.slug }}">
             {% for tag in card.tags %}

@@ -169,6 +169,9 @@ The `methodology` field should let someone understand what the code does without
 
 ## 4. Agent Rules
 
+### ALWAYS read `AGENT_CONTEXT.md` before creating or editing an analysis
+Each collection carries a single `AGENT_CONTEXT.md` at its root. It is the consolidated entry point: an auto-generated preamble summarizing groups, tags, output formats, and status counts (between the `<!-- AGENT_CONTEXT:AUTO:START -->` / `:AUTO:END -->` markers), followed by human-curated conventions, data-loading notes, plotting rules, and project-specific gotchas. Read it first; everything else (registry, individual `meta.yaml`s, the sibling `change_log.md`) is supplementary.
+
 ### NEVER edit `notes.md` files
 These are the scientist's personal annotations. They appear in the viewer but are exclusively human-authored. If you need to add information to a card, update `meta.yaml` (description or methodology fields).
 
@@ -413,30 +416,22 @@ Be conservative with tags. Tags are for filtering and discovery, not for describ
 - Don't add tags speculatively — add them when you have a filtering use case
 - Check the `registry.yaml` file before creating new tags to see what already exists
 
-## 11. Agent Notes (`agent_notes.md`)
+## 11. Agent Context (`AGENT_CONTEXT.md`)
 
-Each analysis directory may contain an `agent_notes.md` file — short, concise notes written by the agent about changes the user requested, edge cases discovered, or gotchas to avoid.
+Each collection carries a single `AGENT_CONTEXT.md` at its root. It is the consolidated reference an agent should read before creating or editing any analysis — replacing the per-collection / per-analysis `agent_notes.md` files of previous versions.
 
-**Purpose:** Helps future sessions avoid repeating past mistakes. When the user asks for a change and the agent learns something non-obvious, it records it here.
+The file has two regions:
 
-**Two levels:**
-- **Per-analysis** `agent_notes.md` — in each analysis directory, for analysis-specific gotchas
-- **Collection-level** `agent_notes.md` — in the collection root (e.g., `analysis/my_collection/agent_notes.md`), for cross-cutting lessons that apply to all analyses
+* **Auto-generated preamble** between the markers `<!-- AGENT_CONTEXT:AUTO:START -->` and `<!-- AGENT_CONTEXT:AUTO:END -->`. Regenerated on every `labdash build` / `serve` / metadata edit (and on live-mode meta or registry changes). Summarizes the organizing principle (from `registry.agent_notes`), group counts, alphabetical tag counts, output-format counts, and status counts. **Do not edit between the markers — your edits will be overwritten.**
+* **Human body** outside the markers. Free-form prose: conventions, data-loading notes, plotting rules, project-specific gotchas, anything cross-cutting. When an agent learns something non-obvious that future sessions should know, it adds a bullet here (in the appropriate `##` section).
 
 **Rules:**
-- Keep it brief — bullet points, not prose
-- Write whenever the user requests a change or you discover a non-obvious bug
-- **Read the collection-level notes before creating or rebuilding any analysis**
-- Read per-analysis notes before editing that specific analysis
-- `notes.md` is still human-only; `agent_notes.md` is agent-authored
-- Agent notes are visible in the viewer as a read-only "Agent Notes" section on cards
 
-**Example:**
-```markdown
-- User changed N_BINS from 15 to 7 for histograms (too many bins for small N)
-- seaborn boxplot auto-sets ylabel from column name — always set explicitly
-- Data loader returns abbreviated keys ("train" not "training") — use correct keys
-```
+- Read `AGENT_CONTEXT.md` before creating or rebuilding any analysis.
+- Write into the human body whenever you discover a non-obvious bug or the user pushes back on an approach worth remembering; place the note under the most appropriate `##` section, or create a new one.
+- Never edit between the AUTO markers.
+- `notes.md` is still human-only (scientist's annotations); `AGENT_CONTEXT.md`'s human body is agent-and-human-authored.
+- Sync triggers automatically; you do not regenerate the auto preamble manually.
 
 ## 12. Change Log (`change_log.md`)
 
@@ -479,7 +474,7 @@ tags:
 **Rules:**
 - Read `registry.yaml` before assigning groups and tags to new analyses.
 - Prefer existing groups and tags over creating new ones.
-- The `agent_notes` top-level string field is for high-level organizational principles; survives YAML round-trips.
+- The `agent_notes` top-level string field is for high-level organizational principles; survives YAML round-trips and is surfaced verbatim in the auto preamble of `AGENT_CONTEXT.md`.
 - When creating a new analysis, set `group:` in meta.yaml — on next build, sync appends it to the end of that group in the registry.
 - You may edit `registry.yaml` directly to change ordering or group membership; registry wins for existing analyses.
 

@@ -84,8 +84,12 @@ analyses/
     analysis.py    # the script (required)
     meta.yaml      # metadata (required)
     notes.md       # human notes (optional, never edited by agents)
-    agent_notes.md # agent notes (optional, written by agents)
 ```
+
+A collection-level `AGENT_CONTEXT.md` (auto-generated, with a free-form
+human body) lives at the collection root and is the single entry point
+agents read before creating or editing analyses; see "AGENT_CONTEXT.md"
+below.
 
 Here is the full `analysis.py` template:
 
@@ -499,7 +503,6 @@ When an analysis has no shared imports, the Code section shows a single pane wit
 ### Notes
 
 - **notes.md** -- human notes, shown in a collapsible section. Editable in live mode. Never written by AI agents.
-- **agent_notes.md** -- agent notes, shown in a separate collapsible section with distinct styling (monospace, muted color). Written by AI agents to explain their reasoning.
 
 ### Keyboard shortcuts
 
@@ -544,12 +547,13 @@ _lib/
 
 LabDash is designed so that an AI coding agent can:
 
-1. **Create an analysis** -- write `analysis.py` and `meta.yaml` in a new directory under the analyses folder.
-2. **Edit an analysis** -- modify the `.py` file directly. Plain Python, no notebook cell boundaries to navigate.
-3. **Run an analysis** -- execute `python analysis.py` or `labdash build slug_name` and check exit code.
-4. **Verify output** -- confirm that `output.png` (or `.svg`, or `output.html`) was produced.
-5. **Read the change log** -- inspect `change_log.md` to learn what the user changed in the viewer (style preferences, label tweaks, etc.).
-6. **Write agent notes** -- document reasoning and decisions in `agent_notes.md`.
+1. **Read `AGENT_CONTEXT.md`** -- the consolidated entry point at the collection root: organizing principle, groups, tags, status counts, plus human-curated conventions and gotchas.
+2. **Create an analysis** -- write `analysis.py` and `meta.yaml` in a new directory under the analyses folder.
+3. **Edit an analysis** -- modify the `.py` file directly. Plain Python, no notebook cell boundaries to navigate.
+4. **Run an analysis** -- execute `python analysis.py` or `labdash build slug_name` and check exit code.
+5. **Verify output** -- confirm that `output.png` (or `.svg`, or `output.html`) was produced.
+6. **Read the change log** -- inspect `change_log.md` to learn what the user changed in the viewer (style preferences, label tweaks, etc.).
+7. **Update `AGENT_CONTEXT.md`** -- when you discover a non-obvious bug or the user pushes back on an approach worth remembering, add a bullet to the appropriate `##` section in the human body of `AGENT_CONTEXT.md` (below the AUTO end marker).
 
 **What makes this agent-friendly:**
 
@@ -561,13 +565,16 @@ LabDash is designed so that an AI coding agent can:
 
 ---
 
-## Agent Notes and Change Log
+## AGENT_CONTEXT.md and Change Log
 
-### agent_notes.md
+### AGENT_CONTEXT.md
 
-Each analysis directory can contain an `agent_notes.md` file. This is written by the AI agent to explain what the analysis does, why certain decisions were made, and what to watch out for. It is displayed in the viewer in a distinct monospace style.
+Each collection carries a single `AGENT_CONTEXT.md` at its root. It is the consolidated reference for AI agents — replacing the per-analysis and per-collection `agent_notes.md` files of previous versions. The file has two regions:
 
-A collection-level `agent_notes.md` can also live in the analyses directory root for project-wide notes.
+- **Auto-generated preamble** between `<!-- AGENT_CONTEXT:AUTO:START -->` and `<!-- AGENT_CONTEXT:AUTO:END -->`. Regenerated on every `labdash build` / `serve` / metadata edit and on live-mode meta or registry changes. Reports the organizing principle (verbatim from `registry.yaml`'s `agent_notes:` field), group counts, alphabetical tag counts, output-format counts, and status counts. **Edits inside the markers are overwritten on the next sync.**
+- **Human body** outside the markers. Free-form prose: conventions, data-loading notes, plotting rules, project-specific gotchas. Agents and humans both edit this region; agents add bullets to the appropriate `##` section whenever they learn something non-obvious that future sessions should know.
+
+Agents should read `AGENT_CONTEXT.md` before creating or editing any analysis — it is the single entry point.
 
 ### change_log.md
 
