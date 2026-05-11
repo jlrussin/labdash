@@ -493,3 +493,64 @@ tags:
 Stale analyses are flagged with a red "stale" badge in the viewer. The **Run All Stale** button reruns only them, in topo order. Clicking **Run** on a single card runs any transitively-stale upstream before the target.
 
 **Implication for shared-plot edits.** Editing `_lib/plots/X.py` — or any `_lib/` leaf that `X.py` itself imports (e.g. `_lib/preprocessing.py`) — automatically marks every wrapper that transitively imports it as stale. The sidebar editor's Save response lists the affected slugs; the viewer adds stale badges to those cards without a reload.
+
+## 15. Live mode (file watcher + SSE)
+
+When `labdash serve` is running, the server watches the collection's
+`meta.yaml`, `registry.yaml`, every `analysis.py` wrapper, and every
+`.py` under `_lib/` (whether the `_lib/` lives inside the collection
+or as a sibling directory). Edits made directly on disk — by you, by
+an AI agent, or by a build step — propagate to the open viewer via
+Server-Sent Events on `GET /events`. There is no polling and no need
+to refresh the page.
+
+The viewer patches itself surgically for these changes:
+- `_lib/*.py` edit → stale badges update; the in-card highlighted
+  shared-code panes refresh; if a Monaco editor is currently open on
+  that file the buffer is replaced **only if it is clean** — see the
+  conflict rule below.
+- `<slug>/analysis.py` edit → stale badge for that slug; the inline
+  highlighted code refreshes; same Monaco-clean-only buffer rule for
+  the wrapper editor.
+- `<slug>/meta.yaml` edit to `title`, `description`, `methodology`,
+  `status`, `tags`, or `figure_id` → the corresponding card field
+  updates in place.
+- `registry.yaml` edit that just reorders slugs within a group → the
+  cards reorder in the DOM.
+- `registry.yaml` edit that moves a slug between existing groups →
+  the card moves in the DOM.
+
+Some changes still trigger a full page reload (`location.reload()`),
+because the DOM doesn't carry a structural template for them:
+- a new group is added or an existing group is removed/renamed in
+  `registry.yaml`
+- a slug is added to or removed from the collection
+- `meta.dependencies` or `meta.output_format` changes (affects
+  pipeline lineage / output rendering)
+- `collection.yaml` changes
+- a wrapper or `meta.yaml` is deleted
+
+**Monaco dirty-buffer rule.** If you have a `_lib/` or wrapper file
+open in Monaco with unsaved edits and the same file changes on disk,
+the buffer is **not** overwritten. A toast warns you and your local
+edits are preserved; Save will overwrite the disk version, or close
+the editor without saving to load the disk version.
+
+**`_lib` import errors during live mode.** Saving a `_lib/` file (on
+disk or via the in-browser editor) that introduces a star import, a
+dynamic import, or a syntax error raises `LibImportError`. In live
+mode this surfaces as a persistent banner at the top of the viewer
+listing the file, line, and a fix hint. Stale-set updates pause until
+the error is cleared; subsequent successful saves clear the banner.
+
+**`meta.group` vs registry.** Editing `meta.group` for an *existing*
+analysis on disk still does nothing — the registry remains the source
+of truth for group membership (see §13). The server logs a warning;
+the viewer ignores the change. To move an existing card between
+groups, edit `registry.yaml` directly or use the in-app dropdown /
+drag-and-drop.
+
+**No auto-run.** Live mode does **not** automatically re-execute
+stale analyses. To rerun, click Run on a card, Run All Stale, or
+invoke `labdash build --only-stale` from a terminal. Auto-run is a
+separate (future) feature.

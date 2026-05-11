@@ -1,9 +1,12 @@
 """FastAPI local development server with in-browser editing."""
 
+import asyncio
 import base64
 import difflib
 import json
+import os
 import sys
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -11,7 +14,7 @@ import yaml
 
 try:
     from fastapi import FastAPI, HTTPException
-    from fastapi.responses import HTMLResponse, JSONResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
 except ImportError:
@@ -26,6 +29,9 @@ from .runner import (
     stale_only,
 )
 from .builder import build_dashboard
+from .live_events import EventBus, is_shutdown
+from .live_translator import LiveTranslator
+from .watcher import FileWatcher
 
 
 class CodeUpdate(BaseModel):
@@ -129,13 +135,46 @@ def _move_slug_in_registry(analyses_dir: Path, slug: str, old_group: str | None,
         yaml.dump(registry, f, default_flow_style=False, sort_keys=False)
 
 
+def _encode_sse(event: dict) -> str:
+    """Encode a `{event, data}` dict as an SSE wire-format message."""
+    name = event.get("event", "message")
+    data = json.dumps(event.get("data", {}))
+    return f"event: {name}\ndata: {data}\n\n"
+
+
 def create_app(config: dict) -> FastAPI:
     """Create the FastAPI application."""
     from .cli import _resolve_dirs
+    from .builder import _resolve_lib_dir
     analyses_dir, output_dir = _resolve_dirs(config)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    app = FastAPI(title="LabDash")
+    bus = EventBus()
+    translator = LiveTranslator(analyses_dir, output_dir, bus)
+    lib_dir = _resolve_lib_dir(analyses_dir)
+    watcher = FileWatcher(
+        analyses_dir,
+        on_change=translator.handle,
+        lib_dir=lib_dir,
+    )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        loop = asyncio.get_running_loop()
+        bus.bind_loop(loop)
+        try:
+            translator.prime()
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        watcher.start()
+        try:
+            yield
+        finally:
+            watcher.stop()
+            bus.shutdown()
+
+    app = FastAPI(title="LabDash", lifespan=lifespan)
 
     # ── API endpoints ──────────────────────────────────────
 
@@ -543,6 +582,34 @@ def create_app(config: dict) -> FastAPI:
             del sys.modules[k]
         return {"status": "reloaded", "cleared": len(to_remove)}
 
+    # ── Live-mode event stream ─────────────────────────────
+
+    @app.get("/events")
+    async def events():
+        """Server-Sent Events stream for live-mode file-watcher updates.
+
+        Each connected viewer subscribes here. On connect we emit a
+        `hello` event carrying the server PID; subsequent events come
+        from the file watcher via the translator. The client uses the
+        PID to detect server restarts (and trigger a full reload).
+        """
+        async def stream():
+            q = bus.subscribe()
+            try:
+                yield _encode_sse({
+                    "event": "hello",
+                    "data": {"pid": os.getpid(),
+                             "watch_root": str(analyses_dir)},
+                })
+                while True:
+                    item = await q.get()
+                    if is_shutdown(item):
+                        break
+                    yield _encode_sse(item)
+            finally:
+                bus.unsubscribe(q)
+        return StreamingResponse(stream(), media_type="text/event-stream")
+
     # ── Serve the dashboard ────────────────────────────────
 
     @app.get("/")
@@ -567,6 +634,17 @@ def _get_live_mode_script() -> str:
 <!-- Monaco Editor loader from CDN -->
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
 <script>
+/* ── Live Mode: shared state used by Monaco editors + SSE handlers ── */
+window.LiveMode = window.LiveMode || {
+    wrapperEditors: {},
+    wrapperSaved: {},
+    wrapperDirty: new Set(),
+    libEditor: null,
+    libCurrentFile: null,
+    libDirty: false,
+    serverPid: null,
+};
+
 /* ── Live Mode: Show live-only buttons, enable live ordering ── */
 (function() {
     isLiveMode = true;
@@ -732,6 +810,7 @@ window.reloadData = async function() {
 
             // Store initial code
             savedCode[slug] = rawCode[slug];
+            window.LiveMode.wrapperSaved[slug] = rawCode[slug];
 
             // Create read-only Monaco editor
             const ed = monaco.editor.create(monacoContainer, {
@@ -751,6 +830,14 @@ window.reloadData = async function() {
                 domReadOnly: true,
             });
             editors[slug] = ed;
+            window.LiveMode.wrapperEditors[slug] = ed;
+            ed.onDidChangeModelContent(() => {
+                if (ed.getValue() !== window.LiveMode.wrapperSaved[slug]) {
+                    window.LiveMode.wrapperDirty.add(slug);
+                } else {
+                    window.LiveMode.wrapperDirty.delete(slug);
+                }
+            });
 
             // Create button bar
             const btnBar = document.createElement('div');
@@ -811,6 +898,7 @@ window.reloadData = async function() {
                 // Revert to last saved version
                 ed.setValue(savedCode[slug]);
                 rawCode[slug] = savedCode[slug];
+                window.LiveMode.wrapperDirty.delete(slug);
                 exitEditMode();
             });
 
@@ -833,6 +921,8 @@ window.reloadData = async function() {
                 if (resp.ok) {
                     rawCode[slug] = code;
                     savedCode[slug] = code;
+                    window.LiveMode.wrapperSaved[slug] = code;
+                    window.LiveMode.wrapperDirty.delete(slug);
                     return true;
                 }
                 return false;
@@ -967,6 +1057,9 @@ window.reloadData = async function() {
     panel.addEventListener('libpanel:closed', () => {
         if (libEditor) { libEditor.dispose(); libEditor = null; }
         headerActions.innerHTML = '';
+        window.LiveMode.libEditor = null;
+        window.LiveMode.libCurrentFile = null;
+        window.LiveMode.libDirty = false;
     });
 
     function mountEditor(container, name, value) {
@@ -988,6 +1081,13 @@ window.reloadData = async function() {
                 domReadOnly: false,
             });
             libEditor = editor;
+            window.LiveMode.libEditor = editor;
+            window.LiveMode.libCurrentFile = name;
+            window.LiveMode.libDirty = false;
+            editor.onDidChangeModelContent(() => {
+                window.LiveMode.libDirty =
+                    (editor.getValue() !== (libRawCode[name] || ''));
+            });
 
             const saveBtn = document.createElement('button');
             saveBtn.className = 'btn btn-save';
@@ -1007,6 +1107,7 @@ window.reloadData = async function() {
                     const data = await resp.json();
                     if (resp.ok) {
                         libRawCode[name] = code;
+                        window.LiveMode.libDirty = false;
                         // Refresh in-card shared panes with Pygments-highlighted HTML
                         // returned from the server so edits keep syntax colors.
                         if (data.code_highlighted !== undefined) {
@@ -1030,5 +1131,347 @@ window.reloadData = async function() {
             });
         });
     }
+})();
+
+/* ── Live Mode: file-watcher SSE client + surgical patch helpers ── */
+(function() {
+    const L = window.LiveMode;
+
+    function escapeAttr(s) { return CSS.escape(s); }
+
+    // ── Toast + error-banner DOM stubs (created on demand) ─────────
+    let toastBox = null;
+    function ensureToastBox() {
+        if (toastBox) return toastBox;
+        toastBox = document.createElement('div');
+        toastBox.id = 'liveToastBox';
+        toastBox.style.cssText =
+            'position:fixed;top:1rem;right:1rem;z-index:9999;display:flex;'
+            + 'flex-direction:column;gap:0.5rem;pointer-events:none;';
+        document.body.appendChild(toastBox);
+        return toastBox;
+    }
+
+    window.showLiveToast = function(message, kind) {
+        const box = ensureToastBox();
+        const t = document.createElement('div');
+        const bg = kind === 'error' ? '#742a2a'
+            : kind === 'warn' ? '#7a5c1d'
+            : '#2c3e50';
+        t.style.cssText =
+            'background:' + bg + ';color:#fff;padding:0.6rem 0.9rem;'
+            + 'border-radius:6px;font-size:0.85rem;box-shadow:0 4px 12px rgba(0,0,0,0.3);'
+            + 'pointer-events:auto;max-width:380px;line-height:1.4;'
+            + 'opacity:0;transition:opacity 0.2s ease;';
+        t.textContent = message;
+        box.appendChild(t);
+        requestAnimationFrame(() => { t.style.opacity = '1'; });
+        setTimeout(() => {
+            t.style.opacity = '0';
+            setTimeout(() => t.remove(), 250);
+        }, 6000);
+    };
+
+    let errorBanner = null;
+    window.showLibError = function(payload) {
+        if (!errorBanner) {
+            errorBanner = document.createElement('div');
+            errorBanner.id = 'libErrorBanner';
+            errorBanner.style.cssText =
+                'position:fixed;top:0;left:0;right:0;z-index:9998;'
+                + 'background:#742a2a;color:#fff;padding:0.7rem 1rem;'
+                + 'font-family:monospace;font-size:0.8rem;line-height:1.4;'
+                + 'white-space:pre-wrap;border-bottom:1px solid #5b1f1f;'
+                + 'box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+            document.body.appendChild(errorBanner);
+        }
+        errorBanner.textContent = '_lib import error: ' + (payload.message || '(no message)');
+        errorBanner.style.display = '';
+    };
+    window.clearLibError = function() {
+        if (errorBanner) errorBanner.style.display = 'none';
+    };
+
+    // ── DOM helpers ─────────────────────────────────────────────────
+    function getCard(slug) {
+        return document.getElementById('card-' + slug);
+    }
+
+    window.applyStaleSet = function(slugs) {
+        const want = new Set(slugs);
+        document.querySelectorAll('.card').forEach(card => {
+            const slug = card.dataset.slug;
+            const badge = card.querySelector('.badge-stale');
+            if (want.has(slug)) {
+                if (!badge) {
+                    const badges = card.querySelector('.card-badges');
+                    if (badges) {
+                        const s = document.createElement('span');
+                        s.className = 'badge badge-stale';
+                        s.textContent = 'stale';
+                        badges.appendChild(s);
+                    }
+                }
+            } else if (badge) {
+                badge.remove();
+            }
+        });
+        if (typeof applyFilters === 'function') applyFilters();
+    };
+
+    window.applyGroupChange = function(slug, newGroup, groupLabel, beforeSlug) {
+        const card = getCard(slug);
+        if (!card) return false;
+        const subtitle = document.querySelector(
+            '.group-subtitle[data-group="' + escapeAttr(newGroup) + '"]'
+        );
+        if (!subtitle) return false;
+        const container = card.parentNode;
+        let target = null;
+        if (beforeSlug) {
+            target = getCard(beforeSlug);
+        }
+        if (!target) {
+            // Insert at the end of this group's run: walk forward from
+            // the subtitle until the next subtitle (or end of container).
+            let cur = subtitle.nextElementSibling;
+            while (cur && cur.classList.contains('card')) {
+                cur = cur.nextElementSibling;
+            }
+            target = cur; // next subtitle or null
+        }
+        if (target) {
+            container.insertBefore(card, target);
+        } else {
+            container.appendChild(card);
+        }
+        card.dataset.group = newGroup;
+        const label = card.querySelector('.card-group-label');
+        if (label) label.textContent = groupLabel;
+        if (typeof updateGroupSubtitles === 'function') updateGroupSubtitles();
+        if (typeof updateSidebarGroupCounts === 'function') updateSidebarGroupCounts();
+        if (typeof applyFilters === 'function') applyFilters();
+        return true;
+    };
+
+    window.applyCardOrder = function(group, slugs) {
+        const subtitle = document.querySelector(
+            '.group-subtitle[data-group="' + escapeAttr(group) + '"]'
+        );
+        if (!subtitle) return false;
+        const container = subtitle.parentNode;
+        // Walk forward from the subtitle, re-inserting cards in `slugs` order.
+        let anchor = subtitle.nextElementSibling;
+        for (const slug of slugs) {
+            const card = getCard(slug);
+            if (!card) continue;
+            if (card === anchor) {
+                anchor = anchor.nextElementSibling;
+                continue;
+            }
+            container.insertBefore(card, anchor);
+        }
+        return true;
+    };
+
+    window.applyMetaChange = function(slug, fields) {
+        const card = getCard(slug);
+        if (!card) return false;
+        if (fields.title !== undefined) {
+            const t = card.querySelector('.card-title');
+            if (t) {
+                // Preserve the collapse icon span; replace the trailing text.
+                const icon = t.querySelector('.card-collapse-icon');
+                t.textContent = '';
+                if (icon) t.appendChild(icon);
+                t.appendChild(document.createTextNode(fields.title));
+            }
+        }
+        if (fields.description !== undefined) {
+            const d = card.querySelector('.card-description');
+            if (d) d.textContent = fields.description || '';
+        }
+        if (fields.status !== undefined) {
+            const badge = card.querySelector('.status-badge');
+            if (badge) {
+                // Remove existing badge-<status> class
+                badge.classList.forEach(c => {
+                    if (c.startsWith('badge-') && c !== 'badge') badge.classList.remove(c);
+                });
+                badge.classList.add('badge');
+                badge.classList.add('badge-' + fields.status);
+                badge.textContent = fields.status;
+            }
+            card.dataset.status = fields.status;
+        }
+        if (fields.tags !== undefined) {
+            const tagsDiv = card.querySelector('.card-tags');
+            if (tagsDiv) {
+                const addBtn = tagsDiv.querySelector('.tag-add-btn');
+                tagsDiv.querySelectorAll('.tag').forEach(el => el.remove());
+                for (const tag of (fields.tags || [])) {
+                    const span = document.createElement('span');
+                    span.className = 'tag';
+                    span.innerHTML =
+                        tag + '<span class="tag-remove" onclick="event.stopPropagation(); removeTag(\\'' + slug + '\\', \\'' + tag + '\\')">&times;</span>';
+                    if (addBtn) tagsDiv.insertBefore(span, addBtn);
+                    else tagsDiv.appendChild(span);
+                }
+                card.dataset.tags = (fields.tags || []).join(',');
+            }
+        }
+        if (fields.methodology !== undefined) {
+            const section = document.getElementById('methodology-' + slug);
+            if (section) {
+                const body = section.querySelector('.methodology-text');
+                if (body) body.textContent = fields.methodology || '';
+            } else if (fields.methodology) {
+                // Section doesn't exist but new value is non-empty —
+                // need DOM structure we don't have. Fall back to reload.
+                location.reload();
+                return false;
+            }
+        }
+        if (fields.figure_id !== undefined) {
+            const existing = card.querySelector('.badge-figure-id');
+            if (existing && fields.figure_id) {
+                existing.textContent = fields.figure_id;
+            } else if (existing && !fields.figure_id) {
+                existing.remove();
+            } else if (!existing && fields.figure_id) {
+                // Need to inject the badge — easier to reload to get
+                // the correct ordering against other badges.
+                location.reload();
+                return false;
+            }
+        }
+        if (typeof applyFilters === 'function') applyFilters();
+        return true;
+    };
+
+    window.applyLibCodeUpdate = function(payload) {
+        const path = payload.path;
+        libRawCode[path] = payload.raw;
+        if (payload.highlighted !== undefined) {
+            libCode[path] = payload.highlighted;
+            document.querySelectorAll(
+                '.code-pane[data-pane-kind="shared"][data-lib-name="'
+                + escapeAttr(path) + '"] pre code'
+            ).forEach(el => { el.innerHTML = payload.highlighted; });
+        }
+        // If Monaco has this file open, decide based on dirty state.
+        if (L.libEditor && L.libCurrentFile === path) {
+            if (L.libDirty) {
+                window.showLiveToast(
+                    path + ' was edited on disk; your local edits are preserved. '
+                    + 'Save to overwrite, or close the panel to load the disk version.',
+                    'warn'
+                );
+            } else {
+                L.libEditor.setValue(payload.raw);
+                L.libDirty = false;
+            }
+        }
+    };
+
+    window.applyWrapperCodeUpdate = function(payload) {
+        const slug = payload.slug;
+        rawCode[slug] = payload.raw;
+        // Refresh the static highlighted code-block too (used in some panes).
+        const codeContent = document.getElementById('code-content-' + slug);
+        if (codeContent && payload.highlighted !== undefined) {
+            codeContent.innerHTML = payload.highlighted;
+        }
+        const editor = L.wrapperEditors[slug];
+        if (editor) {
+            if (L.wrapperDirty.has(slug)) {
+                window.showLiveToast(
+                    slug + '/analysis.py was edited on disk; your local edits are preserved. '
+                    + 'Save to overwrite, or click Cancel to load the disk version.',
+                    'warn'
+                );
+            } else {
+                editor.setValue(payload.raw);
+                L.wrapperSaved[slug] = payload.raw;
+                L.wrapperDirty.delete(slug);
+            }
+        }
+    };
+
+    // ── SSE connection ──────────────────────────────────────────────
+    let es;
+    try {
+        es = new EventSource('/events');
+    } catch (e) {
+        console.warn('LiveMode: failed to open /events', e);
+        return;
+    }
+
+    es.addEventListener('hello', e => {
+        try {
+            const d = JSON.parse(e.data);
+            if (L.serverPid !== null && L.serverPid !== d.pid) {
+                location.reload();
+                return;
+            }
+            L.serverPid = d.pid;
+        } catch(err) {}
+    });
+
+    es.addEventListener('stale_set', e => {
+        try { window.applyStaleSet(JSON.parse(e.data).slugs || []); }
+        catch(err) { console.warn(err); }
+    });
+
+    es.addEventListener('card_moved', e => {
+        try {
+            const d = JSON.parse(e.data);
+            const ok = window.applyGroupChange(d.slug, d.new_group, d.group_label, d.before_slug);
+            if (!ok) location.reload();
+        } catch(err) { console.warn(err); location.reload(); }
+    });
+
+    es.addEventListener('card_order', e => {
+        try {
+            const d = JSON.parse(e.data);
+            const ok = window.applyCardOrder(d.group, d.slugs);
+            if (!ok) location.reload();
+        } catch(err) { console.warn(err); }
+    });
+
+    es.addEventListener('meta_changed', e => {
+        try {
+            const d = JSON.parse(e.data);
+            window.applyMetaChange(d.slug, d.fields || {});
+        } catch(err) { console.warn(err); }
+    });
+
+    es.addEventListener('lib_code', e => {
+        try { window.applyLibCodeUpdate(JSON.parse(e.data)); }
+        catch(err) { console.warn(err); }
+    });
+
+    es.addEventListener('wrapper_code', e => {
+        try { window.applyWrapperCodeUpdate(JSON.parse(e.data)); }
+        catch(err) { console.warn(err); }
+    });
+
+    es.addEventListener('lib_error', e => {
+        try { window.showLibError(JSON.parse(e.data)); }
+        catch(err) { console.warn(err); }
+    });
+
+    es.addEventListener('lib_error_clear', () => {
+        window.clearLibError();
+    });
+
+    es.addEventListener('full_reload', () => {
+        location.reload();
+    });
+
+    es.onerror = () => {
+        // EventSource auto-reconnects; just log.
+        console.debug('LiveMode: /events connection error (will retry)');
+    };
 })();
 </script>'''
