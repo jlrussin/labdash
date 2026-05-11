@@ -150,6 +150,41 @@ def test_ignores_outside_tree(tmp_path):
     assert w.classify(other) is None
 
 
+def test_classifies_agent_active_marker(tmp_path):
+    """`.agent_active` at the collection root is whitelisted through the
+    dotfile filter and classified as kind `agent_active`."""
+    analyses = _make_collection(tmp_path)
+    marker = analyses / ".agent_active"
+    marker.write_text("edits_start_at: 2026-05-11T14:00:00Z\n")
+    w = FileWatcher(analyses, on_change=lambda c: None)
+    change = w.classify(marker)
+    assert change is not None
+    assert change.kind == "agent_active"
+    assert change.slug is None
+
+
+def test_agent_active_inside_slug_is_ignored(tmp_path):
+    """A `.agent_active` placed inside a slug directory is NOT whitelisted —
+    only the exact basename at the collection root counts."""
+    analyses = _make_collection(tmp_path)
+    misplaced = analyses / "slug_a" / ".agent_active"
+    misplaced.write_text("")
+    w = FileWatcher(analyses, on_change=lambda c: None)
+    assert w.classify(misplaced) is None
+
+
+def test_other_dotfiles_at_root_still_ignored(tmp_path):
+    """The whitelist is exact — other dotfiles at the root are still dropped."""
+    analyses = _make_collection(tmp_path)
+    other = analyses / ".agent_active.swp"
+    other.write_text("")
+    w = FileWatcher(analyses, on_change=lambda c: None)
+    assert w.classify(other) is None
+    ds_store = analyses / ".DS_Store"
+    ds_store.write_text("")
+    assert w.classify(ds_store) is None
+
+
 # ── debouncer ────────────────────────────────────────────────────────
 
 

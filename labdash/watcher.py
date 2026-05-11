@@ -31,7 +31,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 
-FileKind = Literal["wrapper", "meta", "registry", "lib", "structural"]
+FileKind = Literal["wrapper", "meta", "registry", "lib", "structural", "agent_active"]
 
 
 @dataclass(frozen=True)
@@ -129,11 +129,20 @@ class FileWatcher:
 
     def classify(self, path: Path) -> FileChange | None:
         """Map an absolute path to a `FileChange`, or None if irrelevant."""
-        if _should_ignore(path):
-            return None
         try:
             abspath = path.resolve()
         except OSError:
+            return None
+
+        # `.agent_active` marker file at the collection root — whitelisted
+        # ahead of the hidden-file filter below, which would otherwise
+        # drop it. Only the exact basename at the root counts.
+        if _is_subpath(abspath, self._root):
+            rel_to_root = abspath.relative_to(self._root)
+            if len(rel_to_root.parts) == 1 and rel_to_root.parts[0] == ".agent_active":
+                return FileChange(path=path, kind="agent_active", slug=None, is_delete=False)
+
+        if _should_ignore(path):
             return None
 
         # `_lib/` first — handles both inside-root and sibling-root layouts.

@@ -335,6 +335,21 @@ def run(output_dir: Path) -> dict:
     return stats
 ```
 
+### Do NOT bake colors into `output.html`
+
+Custom analyst HTML must inherit colour from the labdash theme so
+dark mode works correctly. Avoid inline `style="color: ..."`,
+`style="background: ..."`, `bgcolor="..."`, `<font color="...">`,
+and `<table border="1">` — these get scrubbed at build/serve time
+because they prevent the theme tokens from applying. Other
+inline styles (padding, font-weight, text-align, font-style)
+are preserved.
+
+If you want to emphasise text, use semantic markup (`<strong>`,
+`<em>`) or class names (`<span class="num">`, etc.) — labdash's
+CSS can theme those, but it can't reach inside an inline style
+attribute.
+
 ## 8. Working with `_lib/`
 
 ### Import rules in `_lib/` (mandatory)
@@ -549,6 +564,37 @@ drag-and-drop.
 stale analyses. To rerun, click Run on a card, Run All Stale, or
 invoke `labdash build --only-stale` from a terminal. Auto-run is a
 separate (future) feature.
+
+## 15a. Announcing your activity (agent protocol)
+
+Before you begin a sequence of edits on a collection, announce yourself so
+the user's open `labdash serve` dashboard can show a banner with a Pause
+button and give the user a chance to enter reading mode before your edits
+land.
+
+The protocol — follow it every time you edit a collection:
+
+1. Compute a timestamp 10 seconds in the future, ISO 8601, UTC:
+   ```bash
+   python -c "from datetime import datetime, timezone, timedelta; \
+       print((datetime.now(timezone.utc) + timedelta(seconds=10)).strftime('%Y-%m-%dT%H:%M:%SZ'))"
+   ```
+2. Create `<collection>/.agent_active` containing exactly:
+   ```yaml
+   edits_start_at: <that-timestamp>
+   ```
+3. **Sleep 10 seconds** (`sleep 10`) before making any edits. The dashboard
+   uses this window to show the user a countdown and let them pause.
+4. Do your work.
+5. Delete `<collection>/.agent_active` when you finish.
+
+If you crash without removing the marker, the user can clear it via the
+banner's `×` button.
+
+This protocol is **per-collection**. If you edit two collections in one
+session, announce each separately. Parallel agents on the same collection
+race on the marker file — first to finish removes it; known limitation,
+not a defect.
 
 ## 16. Slice-aware manual ordering (per-card buttons + bulk select)
 

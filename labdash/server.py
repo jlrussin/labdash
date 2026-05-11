@@ -28,7 +28,7 @@ from .runner import (
     expand_with_stale_upstream,
     stale_only,
 )
-from .builder import build_dashboard
+from .builder import build_dashboard, _scrub_baked_html
 from . import agent_context
 from .live_events import EventBus, is_shutdown
 from .live_translator import LiveTranslator
@@ -234,7 +234,7 @@ def create_app(config: dict) -> FastAPI:
             payload["stats"] = json.loads(stats_path.read_text())
         table_path = slug_output / "output.html"
         if table_path.exists():
-            payload["table_html"] = table_path.read_text()
+            payload["table_html"] = _scrub_baked_html(table_path.read_text())
         return payload
 
     @app.post("/api/run/{slug}")
@@ -605,6 +605,20 @@ def create_app(config: dict) -> FastAPI:
             del sys.modules[k]
         return {"status": "reloaded", "cleared": len(to_remove)}
 
+    @app.post("/api/agent-active/clear")
+    def clear_agent_active():
+        """Delete the `.agent_active` marker. Used by the banner's × button
+        to recover from a stale marker (agent crashed without cleaning up).
+        The watcher picks up the delete and emits `agent_idle` through the
+        normal path; no event is published from here directly."""
+        marker = analyses_dir / ".agent_active"
+        if marker.exists():
+            try:
+                marker.unlink()
+            except OSError as e:
+                raise HTTPException(500, f"Failed to remove marker: {e}")
+        return {"status": "cleared"}
+
     # ── Live-mode event stream ─────────────────────────────
 
     @app.get("/events")
@@ -622,7 +636,8 @@ def create_app(config: dict) -> FastAPI:
                 yield _encode_sse({
                     "event": "hello",
                     "data": {"pid": os.getpid(),
-                             "watch_root": str(analyses_dir)},
+                             "watch_root": str(analyses_dir),
+                             "agent_active": translator.get_agent_active()},
                 })
                 while True:
                     item = await q.get()
@@ -666,6 +681,7 @@ window.LiveMode = window.LiveMode || {
     libCurrentFile: null,
     libDirty: false,
     serverPid: null,
+    paused: false,
 };
 
 /* ── Live Mode: Show live-only buttons, enable live ordering ── */
@@ -1447,6 +1463,7 @@ window.reloadData = async function() {
     });
 
     es.addEventListener('stale_set', e => {
+        if (window.LiveMode.paused) return;
         try { window.applyStaleSet(JSON.parse(e.data).slugs || []); }
         catch(err) { console.warn(err); }
     });
@@ -1462,6 +1479,7 @@ window.reloadData = async function() {
     }
 
     es.addEventListener('card_moved', e => {
+        if (window.LiveMode.paused) return;
         if (isOwnOrderEcho()) return;
         try {
             const d = JSON.parse(e.data);
@@ -1474,6 +1492,7 @@ window.reloadData = async function() {
     });
 
     es.addEventListener('card_order', e => {
+        if (window.LiveMode.paused) return;
         if (isOwnOrderEcho()) return;
         try {
             const d = JSON.parse(e.data);
@@ -1486,6 +1505,7 @@ window.reloadData = async function() {
     });
 
     es.addEventListener('meta_changed', e => {
+        if (window.LiveMode.paused) return;
         try {
             const d = JSON.parse(e.data);
             window.applyMetaChange(d.slug, d.fields || {});
@@ -1493,11 +1513,13 @@ window.reloadData = async function() {
     });
 
     es.addEventListener('lib_code', e => {
+        if (window.LiveMode.paused) return;
         try { window.applyLibCodeUpdate(JSON.parse(e.data)); }
         catch(err) { console.warn(err); }
     });
 
     es.addEventListener('wrapper_code', e => {
+        if (window.LiveMode.paused) return;
         try { window.applyWrapperCodeUpdate(JSON.parse(e.data)); }
         catch(err) { console.warn(err); }
     });
@@ -1512,6 +1534,7 @@ window.reloadData = async function() {
     });
 
     es.addEventListener('full_reload', () => {
+        if (window.LiveMode.paused) return;
         location.reload();
     });
 
@@ -1519,5 +1542,293 @@ window.reloadData = async function() {
         // EventSource auto-reconnects; just log.
         console.debug('LiveMode: /events connection error (will retry)');
     };
+
+    // ── Agent-active banner + Pause/Resume toggle ────────────────────
+    const PAUSE_KEY = 'labdash-paused';
+    try { L.paused = sessionStorage.getItem(PAUSE_KEY) === '1'; } catch(e) {}
+
+    let agentActive = null;        // {edits_start_at: "..."|null} or null
+    let countdownTimer = null;
+    let bannerEl = null;
+
+    const BANNER_CSS = `
+        #agentActiveBanner {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 9997;
+            height: 44px;
+            background: linear-gradient(180deg, #1a2332 0%, #131b27 100%);
+            color: #e6ecf3;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            box-shadow: 0 6px 24px rgba(13, 20, 32, 0.32);
+            display: flex;
+            align-items: center;
+            padding: 0 1.2rem;
+            gap: 0.7rem;
+            font-size: 0.85rem;
+            line-height: 1;
+            transform: translateY(-100%);
+            transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        #agentActiveBanner.visible { transform: translateY(0); }
+        #agentActiveBanner .dot {
+            width: 9px; height: 9px;
+            border-radius: 50%;
+            background: #7d8590;
+            flex-shrink: 0;
+        }
+        #agentActiveBanner.is-active .dot {
+            background: #f0a868;
+            box-shadow: 0 0 0 0 rgba(240, 168, 104, 0.55);
+            animation: agent-banner-pulse 1.8s ease-out infinite;
+        }
+        #agentActiveBanner .label {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: #9aa5b1;
+        }
+        #agentActiveBanner.is-active .label { color: #f0a868; }
+        #agentActiveBanner .sep {
+            color: #475569;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+        #agentActiveBanner .msg {
+            color: #cbd5e1;
+            font-size: 0.84rem;
+            flex: 1;
+            min-width: 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        #agentActiveBanner .countdown {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-variant-numeric: tabular-nums;
+            color: #f0a868;
+            font-weight: 600;
+            background: rgba(240, 168, 104, 0.12);
+            padding: 0.14rem 0.42rem;
+            border-radius: 4px;
+            margin: 0 0.1rem;
+        }
+        #agentActiveBanner .actions {
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            flex-shrink: 0;
+        }
+        #agentActiveBanner .btn-pause {
+            background: rgba(255, 255, 255, 0.08);
+            color: #e6ecf3;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            padding: 0.36rem 0.95rem;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 140ms, border-color 140ms, transform 100ms, color 140ms;
+            letter-spacing: 0.02em;
+            font-family: inherit;
+        }
+        #agentActiveBanner .btn-pause:hover {
+            background: rgba(255, 255, 255, 0.14);
+            border-color: rgba(255, 255, 255, 0.24);
+        }
+        #agentActiveBanner .btn-pause:active { transform: translateY(1px); }
+        #agentActiveBanner.is-paused .btn-pause {
+            background: #f0a868;
+            color: #1a2332;
+            border-color: #f0a868;
+            font-weight: 600;
+        }
+        #agentActiveBanner.is-paused .btn-pause:hover {
+            background: #e89759;
+            border-color: #e89759;
+        }
+        #agentActiveBanner .btn-dismiss {
+            background: transparent;
+            color: rgba(230, 236, 243, 0.55);
+            border: none;
+            font-size: 1.1rem;
+            line-height: 1;
+            width: 26px; height: 26px;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: color 140ms, background 140ms;
+            font-family: inherit;
+        }
+        #agentActiveBanner .btn-dismiss:hover {
+            color: #e6ecf3;
+            background: rgba(255, 255, 255, 0.08);
+        }
+        @keyframes agent-banner-pulse {
+            0%   { box-shadow: 0 0 0 0 rgba(240, 168, 104, 0.55); }
+            70%  { box-shadow: 0 0 0 8px rgba(240, 168, 104, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(240, 168, 104, 0); }
+        }
+        body {
+            transition: padding-top 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+    `;
+
+    function injectBannerStyles() {
+        if (document.getElementById('agentActiveBannerStyles')) return;
+        const style = document.createElement('style');
+        style.id = 'agentActiveBannerStyles';
+        style.textContent = BANNER_CSS;
+        document.head.appendChild(style);
+    }
+
+    function ensureBanner() {
+        if (bannerEl) return bannerEl;
+        injectBannerStyles();
+        bannerEl = document.createElement('div');
+        bannerEl.id = 'agentActiveBanner';
+        bannerEl.innerHTML =
+            '<span class="dot"></span>'
+          + '<span class="label">AGENT</span>'
+          + '<span class="sep">·</span>'
+          + '<span class="msg"></span>'
+          + '<div class="actions"></div>';
+        document.body.appendChild(bannerEl);
+        return bannerEl;
+    }
+
+    function setBodyPadding() {
+        if (!bannerEl) return;
+        if (bannerEl.classList.contains('visible')) {
+            document.body.style.paddingTop = bannerEl.offsetHeight + 'px';
+        } else {
+            document.body.style.paddingTop = '';
+        }
+    }
+
+    function renderBanner() {
+        const paused = L.paused;
+        const active = !!agentActive;
+
+        if (!active && !paused) {
+            if (bannerEl) {
+                bannerEl.classList.remove('visible');
+                setBodyPadding();
+            }
+            return;
+        }
+
+        const b = ensureBanner();
+        b.classList.toggle('is-active', active);
+        b.classList.toggle('is-paused', paused);
+
+        const labelEl = b.querySelector('.label');
+        const msgEl = b.querySelector('.msg');
+
+        if (active) {
+            labelEl.textContent = 'AGENT';
+            const startsAt = agentActive.edits_start_at;
+            const remaining = startsAt
+                ? Math.max(0, Math.ceil((new Date(startsAt) - Date.now()) / 1000))
+                : 0;
+            if (remaining > 0) {
+                msgEl.innerHTML =
+                    'starts editing in <span class="countdown">' + remaining + 's</span> '
+                  + '— pause to read in peace';
+            } else if (paused) {
+                msgEl.textContent = 'is editing this collection — you are paused';
+            } else {
+                msgEl.textContent = 'is editing this collection';
+            }
+        } else {
+            labelEl.textContent = 'PAUSED';
+            msgEl.textContent = 'resume to see latest changes';
+        }
+
+        const actionsEl = b.querySelector('.actions');
+        actionsEl.innerHTML = '';
+        const actionBtn = document.createElement('button');
+        actionBtn.className = 'btn-pause';
+        actionBtn.textContent = paused ? 'Resume' : 'Pause';
+        actionBtn.onclick = togglePause;
+        actionsEl.appendChild(actionBtn);
+        if (active) {
+            const dismissBtn = document.createElement('button');
+            dismissBtn.className = 'btn-dismiss';
+            dismissBtn.title = 'Clear stale marker (deletes .agent_active)';
+            dismissBtn.textContent = '×';
+            dismissBtn.onclick = dismissMarker;
+            actionsEl.appendChild(dismissBtn);
+        }
+
+        b.classList.add('visible');
+        // Defer padding update to next frame so offsetHeight reflects layout.
+        requestAnimationFrame(setBodyPadding);
+    }
+
+    function startCountdown() {
+        if (countdownTimer) return;
+        countdownTimer = setInterval(() => {
+            renderBanner();
+            if (!agentActive || !agentActive.edits_start_at) return;
+            if (new Date(agentActive.edits_start_at) <= Date.now()) {
+                clearInterval(countdownTimer);
+                countdownTimer = null;
+            }
+        }, 1000);
+    }
+
+    function togglePause() {
+        if (L.paused) {
+            try { sessionStorage.setItem(PAUSE_KEY, '0'); } catch(e) {}
+            location.reload();
+        } else {
+            try { sessionStorage.setItem(PAUSE_KEY, '1'); } catch(e) {}
+            L.paused = true;
+            renderBanner();
+        }
+    }
+
+    function dismissMarker() {
+        fetch('/api/agent-active/clear', {method: 'POST'}).catch(() => {});
+        // Optimistic local hide; the watcher will echo agent_idle to confirm.
+        agentActive = null;
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        renderBanner();
+    }
+
+    window.applyAgentActive = function(payload) {
+        agentActive = payload || {edits_start_at: null};
+        renderBanner();
+        if (agentActive.edits_start_at) startCountdown();
+    };
+    window.applyAgentIdle = function() {
+        agentActive = null;
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        renderBanner();
+    };
+
+    // Initial agent_active state piggybacks on `hello`. A second listener
+    // is fine — EventSource fans out to all addEventListener subscribers.
+    es.addEventListener('hello', e => {
+        try {
+            const d = JSON.parse(e.data);
+            if (d.agent_active) window.applyAgentActive(d.agent_active);
+            else window.applyAgentIdle();
+        } catch(err) {}
+    });
+    es.addEventListener('agent_active', e => {
+        try { window.applyAgentActive(JSON.parse(e.data)); } catch(err) {}
+    });
+    es.addEventListener('agent_idle', () => { window.applyAgentIdle(); });
+
+    // Render once at boot so a same-tab reload with paused state in
+    // sessionStorage shows the "Paused" banner immediately, even before
+    // any SSE has arrived.
+    renderBanner();
 })();
 </script>'''

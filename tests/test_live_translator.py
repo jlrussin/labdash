@@ -403,3 +403,86 @@ def test_stale_set_idempotent(collection):
     tr.handle(FileChange(path=lib_file, kind="lib", slug=None, is_delete=False))
 
     assert bus.by_name("stale_set") == []  # idempotent
+
+
+# ── agent_active marker handler ──────────────────────────────────────
+
+
+def test_agent_active_create_with_timestamp(collection):
+    """Valid YAML marker → `agent_active` event carrying the timestamp;
+    state field populated; `get_agent_active()` returns the same dict."""
+    analyses, output = collection
+    tr, bus = _prime(collection)
+
+    marker = analyses / ".agent_active"
+    marker.write_text("edits_start_at: 2026-05-11T14:32:10Z\n")
+
+    tr.handle(FileChange(path=marker, kind="agent_active", slug=None, is_delete=False))
+
+    events = bus.by_name("agent_active")
+    assert len(events) == 1
+    assert events[0]["data"]["edits_start_at"] == "2026-05-11T14:32:10Z"
+    assert tr.get_agent_active() == {"edits_start_at": "2026-05-11T14:32:10Z"}
+
+
+def test_agent_active_create_empty_file(collection):
+    """Empty marker file → `agent_active` event with `edits_start_at: None`."""
+    analyses, output = collection
+    tr, bus = _prime(collection)
+
+    marker = analyses / ".agent_active"
+    marker.write_text("")
+
+    tr.handle(FileChange(path=marker, kind="agent_active", slug=None, is_delete=False))
+
+    events = bus.by_name("agent_active")
+    assert len(events) == 1
+    assert events[0]["data"]["edits_start_at"] is None
+    assert tr.get_agent_active() == {"edits_start_at": None}
+
+
+def test_agent_active_create_malformed_yaml(collection):
+    """Malformed YAML → no crash; `agent_active` event with timestamp None."""
+    analyses, output = collection
+    tr, bus = _prime(collection)
+
+    marker = analyses / ".agent_active"
+    marker.write_text(":\n: : not yaml :\n")
+
+    tr.handle(FileChange(path=marker, kind="agent_active", slug=None, is_delete=False))
+
+    events = bus.by_name("agent_active")
+    assert len(events) == 1
+    assert events[0]["data"]["edits_start_at"] is None
+
+
+def test_agent_active_delete_emits_idle(collection):
+    """Removing the marker → `agent_idle` event; state cleared."""
+    analyses, output = collection
+    tr, bus = _prime(collection)
+
+    marker = analyses / ".agent_active"
+    marker.write_text("edits_start_at: 2026-05-11T14:32:10Z\n")
+    tr.handle(FileChange(path=marker, kind="agent_active", slug=None, is_delete=False))
+    bus.events.clear()
+
+    marker.unlink()
+    tr.handle(FileChange(path=marker, kind="agent_active", slug=None, is_delete=True))
+
+    assert bus.by_name("agent_idle")
+    assert tr.get_agent_active() is None
+
+
+def test_prime_picks_up_existing_marker(collection):
+    """Marker on disk at `prime()` time → state populated; no event emitted."""
+    analyses, output = collection
+    marker = analyses / ".agent_active"
+    marker.write_text("edits_start_at: 2026-05-11T14:00:00Z\n")
+
+    bus = _StubBus()
+    tr = LiveTranslator(analyses, output, bus)
+    tr.prime()
+
+    # prime() does not publish; initial state is delivered via `hello`.
+    assert bus.by_name("agent_active") == []
+    assert tr.get_agent_active() == {"edits_start_at": "2026-05-11T14:00:00Z"}

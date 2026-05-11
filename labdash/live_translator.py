@@ -109,6 +109,31 @@ def _read_meta(path: Path) -> dict | None:
     return data
 
 
+def _parse_agent_active(text: str) -> str | None:
+    """Extract `edits_start_at` from the marker file, or None if absent/malformed.
+
+    YAML auto-parses bare ISO 8601 timestamps (`edits_start_at: 2026-...Z`)
+    into a `datetime`. We coerce back to an ISO 8601 string with a `Z`
+    suffix for UTC so the client's `new Date()` always sees the same shape
+    regardless of whether the agent quoted the value or not.
+    """
+    try:
+        data = yaml.safe_load(text) or {}
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    val = data.get("edits_start_at")
+    if isinstance(val, str):
+        return val
+    if hasattr(val, "isoformat"):
+        s = val.isoformat()
+        if s.endswith("+00:00"):
+            s = s[:-6] + "Z"
+        return s
+    return None
+
+
 def diff_registry(old: list[dict], new: list[dict]) -> list[dict]:
     """Compare two normalized group lists; return SSE event dicts.
 
@@ -188,6 +213,7 @@ class _State:
     registry_groups: list[dict] = field(default_factory=list)
     stale_set: list[str] = field(default_factory=list)
     lib_error_active: bool = False
+    agent_active: dict | None = None
 
 
 class LiveTranslator:
@@ -224,6 +250,12 @@ class LiveTranslator:
             self._refresh_lib_hashes()
             self._refresh_wrapper_hashes()
             self._recompute_stale_set(emit=False)
+            self._prime_agent_active()
+
+    def get_agent_active(self) -> dict | None:
+        """Return a copy of the current agent_active state for the `hello` payload."""
+        with self._lock:
+            return dict(self._state.agent_active) if self._state.agent_active else None
 
     def handle(self, change: FileChange) -> None:
         """Translate one filesystem change to zero or more SSE events."""
@@ -237,6 +269,8 @@ class LiveTranslator:
                     self._handle_meta(change)
                 elif change.kind == "registry":
                     self._handle_registry(change)
+                elif change.kind == "agent_active":
+                    self._handle_agent_active(change)
                 # `structural` is not currently emitted by the watcher;
                 # if we add it later, route through `_emit_full_reload`.
             except Exception:
@@ -352,6 +386,19 @@ class LiveTranslator:
         # still cheap to recheck.
         self._recompute_stale_set(emit=True)
 
+    def _handle_agent_active(self, change: FileChange) -> None:
+        if change.is_delete:
+            self._state.agent_active = None
+            self.bus.publish({"event": "agent_idle", "data": {}})
+            return
+        new_text = _safe_read_text(change.path) or ""
+        edits_start_at = _parse_agent_active(new_text)
+        self._state.agent_active = {"edits_start_at": edits_start_at}
+        self.bus.publish({
+            "event": "agent_active",
+            "data": {"edits_start_at": edits_start_at},
+        })
+
     def _handle_registry(self, change: FileChange) -> None:
         if change.is_delete:
             self._emit_full_reload("registry.yaml removed")
@@ -448,6 +495,17 @@ class LiveTranslator:
                 text = _safe_read_text(p)
                 if text is not None:
                     self._state.content_hashes[p] = _hash_text(text)
+
+    def _prime_agent_active(self) -> None:
+        """Read existing `.agent_active` marker (if any) into state. No event
+        is published here — initial state is delivered through the `hello`
+        event when a client connects."""
+        marker = self.analyses_dir / ".agent_active"
+        if not marker.exists():
+            self._state.agent_active = None
+            return
+        text = _safe_read_text(marker) or ""
+        self._state.agent_active = {"edits_start_at": _parse_agent_active(text)}
 
     def _refresh_wrapper_hashes(self) -> None:
         for child in self.analyses_dir.iterdir():
