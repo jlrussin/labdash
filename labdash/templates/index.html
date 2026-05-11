@@ -162,21 +162,24 @@
     --bg-lineage-hover:    oklch(0.272 0.040 245);
     --bg-splitter-hover:   oklch(0.302 0.050 245);
 
-    /* Text — cool warm-whites, tiered for hierarchy. */
-    --text-primary:        oklch(0.93  0.010 240);
-    --text-heading:        oklch(0.96  0.008 240);
-    --text-secondary:      oklch(0.80  0.011 240);
-    --text-secondary-soft: oklch(0.74  0.011 240);
-    --text-muted:          oklch(0.66  0.012 240);
-    --text-muted-cool:     oklch(0.64  0.014 240);
-    --text-faint:          oklch(0.58  0.010 240);
-    --text-faint-2:        oklch(0.54  0.010 240);
-    --text-faint-3:        oklch(0.50  0.010 240);
-    --text-faint-blue:     oklch(0.50  0.012 245);
-    --text-faintest:       oklch(0.44  0.010 240);
-    --text-faint-cool:     oklch(0.58  0.014 245);
-    --text-shared-diamond: oklch(0.55  0.012 240);
-    --text-tree-faint:     oklch(0.50  0.010 240);
+    /* Text — cool warm-whites, tiered for hierarchy. Bumped up
+       relative to the initial palette so muted prose (table
+       summaries, methodology, descriptions) reads cleanly
+       without staring; aggressive fades looked grey-on-grey. */
+    --text-primary:        oklch(0.95  0.010 240);
+    --text-heading:        oklch(0.97  0.008 240);
+    --text-secondary:      oklch(0.87  0.011 240);
+    --text-secondary-soft: oklch(0.82  0.011 240);
+    --text-muted:          oklch(0.74  0.012 240);
+    --text-muted-cool:     oklch(0.72  0.014 240);
+    --text-faint:          oklch(0.66  0.010 240);
+    --text-faint-2:        oklch(0.60  0.010 240);
+    --text-faint-3:        oklch(0.56  0.010 240);
+    --text-faint-blue:     oklch(0.56  0.012 245);
+    --text-faintest:       oklch(0.50  0.010 240);
+    --text-faint-cool:     oklch(0.64  0.014 245);
+    --text-shared-diamond: oklch(0.60  0.012 240);
+    --text-tree-faint:     oklch(0.56  0.010 240);
     --text-tree-active:    oklch(0.86  0.10  245);
     --text-lineage-sep:    oklch(0.42  0.010 240);
     --text-lineage-diamond:oklch(0.55  0.012 240);
@@ -666,20 +669,20 @@ body {
 }
 .img-action-btn:hover { background: var(--border-default); color: var(--text-primary); }
 /* ── Statistical tables ────────────────────────────────────
-   Pandas-generated tables (df.to_html) carry a border="1"
-   attribute and an inline text-align: right on the thead row.
-   The styling below overrides the legacy border attribute and
-   replaces the all-cell grid with horizontal-only dividers,
-   a sticky muted header, zebra striping, and tabular-nums
-   alignment for numeric columns. */
+   Custom output.html often packages a title, table, summary,
+   and methodology together in one document. The table itself
+   gets a distinct chrome: clearly elevated wrapper with visible
+   border, an accent-tinted bright-text header, horizontal-only
+   row dividers, and tabular-nums numeric alignment.
+   Also overrides pandas' legacy <table border="1"> attribute. */
 .card-output-table-wrapper {
     overflow-x: auto;
     overflow-y: auto;
     max-height: 500px;
-    margin: 0.4rem 0;
-    border: 1px solid var(--border-subtle);
+    margin: 0.6rem 0;
+    border: 1px solid var(--border-default);
     border-radius: 6px;
-    background: var(--bg-surface);
+    background: var(--bg-elevated);
 }
 .card-output table,
 .card-output table[border] {
@@ -690,40 +693,70 @@ body {
     width: 100%;
     table-layout: auto;
     color: var(--text-primary);
+    background: transparent;
 }
 .card-output th,
 .card-output td {
-    padding: 0.55rem 0.9rem;
+    padding: 0.6rem 0.95rem;
     border: 0;
-    border-bottom: 1px solid var(--border-subtle);
     text-align: left;
-    /* Let pandas' inline text-align: right on a <tr> win for
-       numeric columns; left is just the default. */
     vertical-align: top;
 }
 .card-output thead th {
-    background: var(--bg-subtle);
-    font-weight: 600;
+    background: var(--accent-tint);
+    color: var(--text-primary);
+    font-weight: 700;
     font-size: 0.72rem;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-    border-bottom: 1px solid var(--border-default);
+    letter-spacing: 0.06em;
+    border-bottom: 2px solid var(--accent);
     white-space: nowrap;
     position: sticky;
     top: 0;
     z-index: 1;
 }
+.card-output tbody tr   { border-bottom: 1px solid var(--border-subtle); }
+.card-output tbody tr:last-child { border-bottom: 0; }
 .card-output tbody td {
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-variant-numeric: tabular-nums;
     word-wrap: break-word;
     overflow-wrap: break-word;
     max-width: 500px;
 }
-.card-output tbody tr:nth-child(even) td { background: var(--bg-subtle); }
-.card-output tbody tr:last-child td      { border-bottom: 0; }
-.card-output tbody tr:hover td           { background: var(--accent-tint-soft); }
+.card-output tbody tr:hover td { background: var(--accent-tint-soft); }
+
+/* Custom analyst HTML often emits headings / paragraphs / lists
+   alongside the table inside the same output.html. Set sane
+   defaults so prose reads as part of the labdash hierarchy. */
+.card-output-table-wrapper h1,
+.card-output-table-wrapper h2,
+.card-output-table-wrapper h3,
+.card-output-table-wrapper h4 {
+    color: var(--text-heading);
+    font-weight: 600;
+    margin: 0.6rem 0.4rem;
+}
+.card-output-table-wrapper h1 { font-size: 1.05rem; }
+.card-output-table-wrapper h2 { font-size: 0.95rem; }
+.card-output-table-wrapper h3 { font-size: 0.85rem; }
+.card-output-table-wrapper h4 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
+.card-output-table-wrapper p,
+.card-output-table-wrapper li {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    line-height: 1.55;
+    margin: 0.35rem 0.4rem;
+}
+.card-output-table-wrapper strong { color: var(--text-primary); }
+.card-output-table-wrapper details > summary {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    padding: 0.4rem;
+    cursor: pointer;
+    user-select: none;
+}
+.card-output-table-wrapper details > summary:hover { color: var(--text-primary); }
 .no-output {
     padding: 2rem;
     color: var(--text-faint-3);
