@@ -4,14 +4,278 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LabDash</title>
+<script>
+/* Theme bootstrap — runs synchronously before any CSS paints so
+   there is no flash of light content when the user prefers dark.
+   localStorage choice wins over the OS preference. */
+(function() {
+    var saved = null;
+    try { saved = localStorage.getItem('labdash-theme'); } catch (e) {}
+    var theme = saved
+        || (window.matchMedia
+            && window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+    document.documentElement.style.colorScheme = theme;
+})();
+</script>
 <style>
+/* ── Design tokens (light + dark) ──────────────────────────
+   Theme is chosen by an inline <head> script that reads
+   localStorage["labdash-theme"] (with prefers-color-scheme
+   as the first-visit default) and sets data-theme on <html>
+   before paint, so the page never flashes the wrong theme. */
+:root {
+    /* Surfaces (elevation steps; light) */
+    --bg-canvas:           #f5f6fa;
+    --bg-surface:          #ffffff;
+    --bg-elevated:         #ffffff;
+    --bg-input:            #ffffff;
+    --bg-subtle:           #f8f9fa;
+    --bg-notes:            #fffef5;
+    --bg-hover:            #f0f0f0;
+    --bg-hover-cool:       #eef3f7;
+    --bg-tree-active:      #d3e4f5;
+    --bg-lineage-hover:    #f4f8fb;
+    --bg-splitter-hover:   #dfeaf4;
+    /* Code-block surfaces stay dark in BOTH themes (a dark
+       code island is conventional and reads as intentional). */
+    --bg-code:             #1e1e2e;
+    --bg-code-header:      #2d2d44;
+    --text-on-code:        #cdd6f4;
+
+    /* Text */
+    --text-primary:        #1a1a2e;
+    --text-heading:        #2c3e50;
+    --text-secondary:      #555;
+    --text-secondary-soft: #666;
+    --text-muted:          #7f8c8d;
+    --text-muted-cool:     #8a93a6;
+    --text-faint:          #888;
+    --text-faint-2:        #999;
+    --text-faint-3:        #aaa;
+    --text-faint-blue:     #aab;
+    --text-faintest:       #bbb;
+    --text-faint-cool:     #aab4c4;
+    --text-shared-diamond: #a4acb9;
+    --text-tree-faint:     #a0a8b0;
+    --text-tree-active:    #1a6199;
+    --text-lineage-sep:    #cbd2dc;
+    --text-lineage-diamond:#b8c1d1;
+    --text-jump-btn:       #5a6475;
+    --text-card-order:     #6b7682;
+    --text-card-order-dis: #ccd0d5;
+    --text-on-accent:      #ffffff;
+    --text-on-dark:        #ffffff;
+
+    /* Borders */
+    --border-default:      #e0e0e0;
+    --border-subtle:       #f0f0f0;
+    --border-very-subtle:  #f7f7fa;
+    --border-input:        #ddd;
+    --border-input-dashed: #ccc;
+    --border-tab:          #e5e8ed;
+    --border-jump-btn:     #dbe2ea;
+    --border-card-order-h: #cfd9e3;
+
+    /* Accent (primary action — blues) */
+    --accent:              #3498db;
+    --accent-hover:        #2980b9;
+    --accent-text:         #2980b9;
+    --accent-tint:         #ebf5fb;
+    --accent-tint-soft:    #f5fafe;
+    --accent-tint-hover:   #eef4fa;
+    --accent-tint-active:  #dde7f2;
+    --accent-ring:         rgba(52, 152, 219, 0.55);
+    --accent-ring-soft:    rgba(52, 152, 219, 0.08);
+
+    /* Status badges (paired bg/text) */
+    --badge-draft-bg:      #fef3cd;
+    --badge-draft-text:    #856404;
+    --badge-active-bg:     #d1ecf1;
+    --badge-active-text:   #0c5460;
+    --badge-pub-bg:        #d4edda;
+    --badge-pub-text:      #155724;
+    --badge-stale-bg:      #f8d7da;
+    --badge-stale-text:    #721c24;
+    --badge-pipeline-bg:   #eef2f7;
+    --badge-pipeline-text: #425a70;
+    --badge-figure-id-bg:  #e8e0f0;
+    --badge-figure-id-text:#4a2d6e;
+    --badge-hover-filter:  brightness(0.92);
+
+    /* Semantic actions */
+    --success:             #27ae60;
+    --success-hover:       #219a52;
+    --warning:             #f39c12;
+    --warning-hover:       #d68910;
+    --danger:              #e74c3c;
+    --danger-text:         #c0392b;
+    --danger-bg:           #fff5f5;
+    --neutral:             #95a5a6;
+    --neutral-hover:       #7f8c8d;
+
+    /* Notes (warm paper aesthetic) */
+    --notes-accent:        #b8860b;
+    --ro-dot:              #d4a574;
+
+    /* Plot mount — the museum-print framing.
+       Light: subtle hairline so the figure has a clean boundary.
+       Dark: warm off-white panel that makes the white plot read
+       as an intentional print rather than a harsh rectangle. */
+    --plot-mount-bg:       #ffffff;
+    --plot-mount-border:   #ececef;
+    --plot-mount-shadow:   0 1px 3px rgba(0, 0, 0, 0.04);
+    --plot-mount-pad:      0.25rem;
+    --plot-mount-radius:   6px;
+
+    /* Shadows / overlays */
+    --shadow-card-hover:   0 2px 8px rgba(0, 0, 0, 0.08);
+    --shadow-dropdown:     0 4px 12px rgba(0, 0, 0, 0.15);
+    --shadow-chip:         0 4px 16px rgba(0, 0, 0, 0.18);
+    --shadow-panel:        -4px 0 20px rgba(0, 0, 0, 0.2);
+    --overlay-run:         rgba(255, 255, 255, 0.85);
+    --overlay-kbd-hint:    rgba(0, 0, 0, 0.7);
+    --chip-bg:             #2c3e50;
+    /* Whites on the dark .code-block surface — same in both
+       themes because .bg-code is dark in both. */
+    --overlay-on-dark-1:   rgba(255, 255, 255, 0.1);
+    --overlay-on-dark-2:   rgba(255, 255, 255, 0.15);
+    --overlay-on-dark-3:   rgba(255, 255, 255, 0.2);
+    --overlay-on-dark-4:   rgba(255, 255, 255, 0.28);
+    /* Run-overlay spinner ring (light surface, light spinner) */
+    --spinner-ring:        #ddd;
+}
+
+[data-theme="dark"] {
+    /* Surfaces — cool near-black with elevation steps. */
+    --bg-canvas:           oklch(0.158 0.012 245);
+    --bg-surface:          oklch(0.208 0.014 245);
+    --bg-elevated:         oklch(0.245 0.015 245);
+    --bg-input:            oklch(0.228 0.013 245);
+    --bg-subtle:           oklch(0.238 0.013 245);
+    --bg-notes:            oklch(0.228 0.020 80);
+    --bg-hover:            oklch(0.262 0.014 245);
+    --bg-hover-cool:       oklch(0.262 0.020 245);
+    --bg-tree-active:      oklch(0.308 0.060 245);
+    --bg-lineage-hover:    oklch(0.272 0.040 245);
+    --bg-splitter-hover:   oklch(0.302 0.050 245);
+
+    /* Text — cool warm-whites, tiered for hierarchy. */
+    --text-primary:        oklch(0.93  0.010 240);
+    --text-heading:        oklch(0.96  0.008 240);
+    --text-secondary:      oklch(0.80  0.011 240);
+    --text-secondary-soft: oklch(0.74  0.011 240);
+    --text-muted:          oklch(0.66  0.012 240);
+    --text-muted-cool:     oklch(0.64  0.014 240);
+    --text-faint:          oklch(0.58  0.010 240);
+    --text-faint-2:        oklch(0.54  0.010 240);
+    --text-faint-3:        oklch(0.50  0.010 240);
+    --text-faint-blue:     oklch(0.50  0.012 245);
+    --text-faintest:       oklch(0.44  0.010 240);
+    --text-faint-cool:     oklch(0.58  0.014 245);
+    --text-shared-diamond: oklch(0.55  0.012 240);
+    --text-tree-faint:     oklch(0.50  0.010 240);
+    --text-tree-active:    oklch(0.86  0.10  245);
+    --text-lineage-sep:    oklch(0.42  0.010 240);
+    --text-lineage-diamond:oklch(0.55  0.012 240);
+    --text-jump-btn:       oklch(0.74  0.012 240);
+    --text-card-order:     oklch(0.62  0.012 240);
+    --text-card-order-dis: oklch(0.36  0.010 240);
+    --text-on-accent:      oklch(0.08  0.005 245);
+
+    /* Borders — low contrast against canvas. */
+    --border-default:      oklch(0.298 0.012 245);
+    --border-subtle:       oklch(0.258 0.010 245);
+    --border-very-subtle:  oklch(0.232 0.010 245);
+    --border-input:        oklch(0.338 0.014 245);
+    --border-input-dashed: oklch(0.380 0.014 245);
+    --border-tab:          oklch(0.278 0.011 245);
+    --border-jump-btn:     oklch(0.338 0.014 245);
+    --border-card-order-h: oklch(0.358 0.014 245);
+
+    /* Accent — softened cyan-blue so it doesn't strobe on dark. */
+    --accent:              oklch(0.72 0.13 245);
+    --accent-hover:        oklch(0.78 0.13 245);
+    --accent-text:         oklch(0.82 0.13 245);
+    --accent-tint:         oklch(0.302 0.060 245);
+    --accent-tint-soft:    oklch(0.258 0.040 245);
+    --accent-tint-hover:   oklch(0.282 0.050 245);
+    --accent-tint-active:  oklch(0.340 0.070 245);
+    --accent-ring:         oklch(0.72 0.13 245 / 0.55);
+    --accent-ring-soft:    oklch(0.72 0.13 245 / 0.14);
+
+    /* Status badges — OKLCH-calibrated for legible color on dark. */
+    --badge-draft-bg:      oklch(0.30 0.06  80);
+    --badge-draft-text:    oklch(0.88 0.13  80);
+    --badge-active-bg:     oklch(0.30 0.06 220);
+    --badge-active-text:   oklch(0.86 0.12 220);
+    --badge-pub-bg:        oklch(0.30 0.06 145);
+    --badge-pub-text:      oklch(0.88 0.14 145);
+    --badge-stale-bg:      oklch(0.32 0.08  25);
+    --badge-stale-text:    oklch(0.86 0.14  25);
+    --badge-pipeline-bg:   oklch(0.30 0.02 245);
+    --badge-pipeline-text: oklch(0.78 0.04 245);
+    --badge-figure-id-bg:  oklch(0.30 0.06 305);
+    --badge-figure-id-text:oklch(0.86 0.11 305);
+    --badge-hover-filter:  brightness(1.12);
+
+    /* Semantic actions — recalibrated so saturated solids
+       (Run, Save, Edit, Cancel) don't shout on dark. */
+    --success:             oklch(0.66 0.16 145);
+    --success-hover:       oklch(0.72 0.16 145);
+    --warning:             oklch(0.74 0.15  72);
+    --warning-hover:       oklch(0.80 0.15  72);
+    --danger:              oklch(0.66 0.20  25);
+    --danger-text:         oklch(0.82 0.14  25);
+    --danger-bg:           oklch(0.26 0.07  25);
+    --neutral:             oklch(0.54 0.010 245);
+    --neutral-hover:       oklch(0.62 0.010 245);
+
+    /* Notes — warm paper darkens but keeps its hue identity. */
+    --notes-accent:        oklch(0.80 0.13 80);
+    --ro-dot:              oklch(0.78 0.10 60);
+
+    /* Plot mount — the hero detail. Warm off-white that looks
+       like a print mounted on a gallery wall, with a soft cool
+       shadow and a thin hairline. */
+    --plot-mount-bg:       oklch(0.962 0.020 85);
+    --plot-mount-border:   oklch(0.86  0.014 85);
+    --plot-mount-shadow:   0 2px 16px rgba(0, 0, 0, 0.42), 0 0 0 1px oklch(0.50 0.010 85 / 0.45);
+    --plot-mount-pad:      0.55rem 0.7rem 0.45rem;
+    --plot-mount-radius:   6px;
+
+    /* Shadows / overlays — deeper to read against dark canvas. */
+    --shadow-card-hover:   0 2px 14px rgba(0, 0, 0, 0.5);
+    --shadow-dropdown:     0 6px 22px rgba(0, 0, 0, 0.6);
+    --shadow-chip:         0 6px 24px rgba(0, 0, 0, 0.65);
+    --shadow-panel:        -6px 0 28px rgba(0, 0, 0, 0.65);
+    --overlay-run:         rgba(14, 16, 22, 0.78);
+    --overlay-kbd-hint:    rgba(0, 0, 0, 0.72);
+    --chip-bg:             oklch(0.32 0.06 245);
+    /* Run-overlay spinner ring */
+    --spinner-ring:        oklch(0.35 0.012 245);
+}
+
+/* Smooth theme switching — short enough to feel intentional,
+   not laggy. Targets the few properties that actually swap. */
+body, .sidebar, .card, .filter-btn, .btn, .group-dropdown,
+.lib-code-panel, .lib-code-header, .plot-mount, .selection-chip,
+.theme-toggle {
+    transition: background-color 180ms ease,
+                color 180ms ease,
+                border-color 180ms ease,
+                box-shadow 180ms ease;
+}
+
 /* ── Reset & Base ──────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html { font-size: 15px; }
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    color: #1a1a2e;
-    background: #f5f6fa;
+    color: var(--text-primary);
+    background: var(--bg-canvas);
     display: flex;
     min-height: 100vh;
 }
@@ -20,8 +284,8 @@ body {
 .sidebar {
     width: 260px;
     min-width: 260px;
-    background: #fff;
-    border-right: 1px solid #e0e0e0;
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border-default);
     padding: 1.2rem;
     overflow-y: auto;
     position: sticky;
@@ -31,14 +295,14 @@ body {
 .sidebar h1 {
     font-size: 1.3rem;
     margin-bottom: 1rem;
-    color: #2c3e50;
+    color: var(--text-heading);
 }
 .sidebar-section { margin-bottom: 1.2rem; }
 .sidebar-section h3 {
     font-size: 0.75rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #7f8c8d;
+    color: var(--text-muted);
     margin-bottom: 0.5rem;
 }
 
@@ -46,26 +310,67 @@ body {
 .search-box {
     width: 100%;
     padding: 0.4rem 0.6rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-input);
     border-radius: 4px;
     font-size: 0.85rem;
     margin-bottom: 1rem;
 }
-.search-box:focus { outline: none; border-color: #3498db; }
+.search-box:focus { outline: none; border-color: var(--accent); }
 
 /* Filters */
 .filter-group { display: flex; flex-wrap: wrap; gap: 0.3rem; }
 .filter-btn {
     padding: 0.2rem 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-input);
     border-radius: 3px;
-    background: #fff;
+    background: var(--bg-surface);
     font-size: 0.75rem;
     cursor: pointer;
     transition: all 0.15s;
 }
-.filter-btn:hover { border-color: #3498db; }
-.filter-btn.active { background: #3498db; color: #fff; border-color: #3498db; }
+.filter-btn:hover { border-color: var(--accent); }
+.filter-btn.active { background: var(--accent); color: var(--text-on-accent); border-color: var(--accent); }
+
+/* ── Theme toggle ──────────────────────────────────────── */
+.theme-toggle {
+    width: 1.85rem;
+    height: 1.85rem;
+    padding: 0;
+    border: 1px solid var(--border-input);
+    border-radius: 999px;
+    background: var(--bg-surface);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    transition: background-color 180ms ease,
+                border-color 180ms ease,
+                color 180ms ease,
+                transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.theme-toggle:hover {
+    background: var(--accent-tint-hover);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.theme-toggle:active { transform: rotate(20deg) scale(0.94); }
+.theme-toggle-icon {
+    width: 1rem;
+    height: 1rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    line-height: 1;
+    /* Slight upward optical-balance shift for the moon/sun glyph */
+    margin-top: -1px;
+}
+/* In light theme the toggle shows the moon (you can switch to dark);
+   in dark theme it shows the sun (you can switch to light).        */
+.theme-toggle-icon::before { content: "\263E"; }   /* ☾ moon */
+[data-theme="dark"] .theme-toggle-icon::before { content: "\2600"; }  /* ☀ sun */
+[data-theme="dark"] .theme-toggle-icon { font-size: 0.95rem; }
 
 /* Group nav */
 .group-nav { list-style: none; }
@@ -76,13 +381,13 @@ body {
     cursor: pointer;
     transition: background 0.15s;
 }
-.group-nav li:hover { background: #f0f0f0; }
-.group-nav li.active { background: #ebf5fb; color: #2980b9; font-weight: 500; }
-.group-nav li.drag-over { border-top: 2px solid #3498db; }
+.group-nav li:hover { background: var(--bg-hover); }
+.group-nav li.active { background: var(--accent-tint); color: var(--accent-hover); font-weight: 500; }
+.group-nav li.drag-over { border-top: 2px solid var(--accent); }
 .group-count {
     float: right;
     font-size: 0.75rem;
-    color: #aaa;
+    color: var(--text-faint-3);
 }
 
 /* ── Group subtitles ──────────────────────────────────── */
@@ -90,7 +395,7 @@ body {
     padding: 0.4rem 0;
     margin-top: 1.2rem;
     margin-bottom: 0.3rem;
-    border-bottom: 2px solid #e0e0e0;
+    border-bottom: 2px solid var(--border-default);
     display: flex;
     align-items: baseline;
     gap: 0.5rem;
@@ -100,15 +405,15 @@ body {
     font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #7f8c8d;
+    color: var(--text-muted);
     font-weight: 600;
 }
 .group-subtitle-count {
     font-size: 0.7rem;
-    color: #aab;
+    color: var(--text-faint-blue);
 }
 .group-subtitle.drag-over {
-    border-bottom-color: #3498db;
+    border-bottom-color: var(--accent);
     border-bottom-width: 3px;
 }
 
@@ -124,31 +429,31 @@ body {
     align-items: center;
     margin-bottom: 1.5rem;
 }
-.main-header h2 { font-size: 0.95rem; color: #7f8c8d; }
-.card-count { font-size: 0.85rem; color: #7f8c8d; }
+.main-header h2 { font-size: 0.95rem; color: var(--text-muted); }
+.card-count { font-size: 0.85rem; color: var(--text-muted); }
 
 /* ── Cards ─────────────────────────────────────────────── */
 .card {
-    background: #fff;
-    border: 1px solid #e0e0e0;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
     border-radius: 8px;
     margin-bottom: 1.5rem;
     overflow: hidden;
     transition: box-shadow 0.2s;
 }
-.card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-.card.focused { box-shadow: 0 0 0 2px #3498db; }
-.card.drag-over { border-top: 3px solid #3498db; margin-top: -3px; }
+.card:hover { box-shadow: var(--shadow-card-hover); }
+.card.focused { box-shadow: 0 0 0 2px var(--accent); }
+.card.drag-over { border-top: 3px solid var(--accent); margin-top: -3px; }
 .card[draggable="true"] .card-header { cursor: grab; }
 .card[draggable="true"] .card-header:active { cursor: grabbing; }
 .card.dragging { opacity: 0.4; }
 
 /* Selection state — strong blue ring around selected cards */
 .card.selected {
-    box-shadow: 0 0 0 2px #3498db;
-    background: #f5fafe;
+    box-shadow: 0 0 0 2px var(--accent);
+    background: var(--accent-tint-soft);
 }
-.card.selected:hover { box-shadow: 0 0 0 2px #2980b9; }
+.card.selected:hover { box-shadow: 0 0 0 2px var(--accent-hover); }
 
 /* FLIP animation hook — set by JS only during reorder */
 .card.flip-animating { transition: transform 180ms cubic-bezier(0.4, 0, 0.2, 1); }
@@ -175,22 +480,22 @@ body {
     padding: 0.05rem 0.35rem;
     font-size: 0.85rem;
     line-height: 1.1;
-    color: #6b7682;
+    color: var(--text-card-order);
     cursor: pointer;
     user-select: none;
     transition: background 0.1s, border-color 0.1s, color 0.1s;
 }
 .card-order-btn:hover {
-    background: #eef4fa;
-    border-color: #cfd9e3;
-    color: #2c3e50;
+    background: var(--accent-tint-hover);
+    border-color: var(--border-card-order-h);
+    color: var(--text-heading);
 }
-.card-order-btn:active { background: #dde7f2; }
+.card-order-btn:active { background: var(--accent-tint-active); }
 .card-order-btn[disabled] {
     /* No opacity here — it would compose with the parent's 0.25 idle opacity
        and the button would all but disappear. Use a much lighter colour + the
        not-allowed cursor for an obvious "won't respond" affordance. */
-    color: #ccd0d5;
+    color: var(--text-card-order-dis);
     cursor: not-allowed;
     pointer-events: none;
 }
@@ -204,11 +509,11 @@ body {
     align-items: center;
     gap: 0.6rem;
     padding: 0.45rem 0.8rem;
-    background: #2c3e50;
-    color: #fff;
+    background: var(--chip-bg);
+    color: var(--text-on-accent);
     border-radius: 999px;
     font-size: 0.82rem;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    box-shadow: var(--shadow-chip);
     z-index: 1000;
     user-select: none;
     animation: chip-fade-in 0.18s ease-out;
@@ -219,20 +524,20 @@ body {
     to   { opacity: 1; transform: translateY(0); }
 }
 .selection-chip-clear {
-    background: rgba(255,255,255,0.15);
+    background: var(--overlay-on-dark-2);
     border: none;
-    color: #fff;
+    color: var(--text-on-accent);
     border-radius: 999px;
     padding: 0.2rem 0.65rem;
     cursor: pointer;
     font-size: 0.78rem;
     transition: background 0.1s;
 }
-.selection-chip-clear:hover { background: rgba(255,255,255,0.28); }
+.selection-chip-clear:hover { background: var(--overlay-on-dark-4); }
 
 .card-header {
     padding: 1rem 1.2rem;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid var(--border-subtle);
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
@@ -244,7 +549,7 @@ body {
 .card.collapsed .card-body { display: none; }
 .card-collapse-icon {
     font-size: 0.6rem;
-    color: #bbb;
+    color: var(--text-faintest);
     margin-right: 0.5rem;
     transition: transform 0.2s;
     display: inline-block;
@@ -253,7 +558,7 @@ body {
 .card-title {
     font-size: 1.05rem;
     font-weight: 600;
-    color: #2c3e50;
+    color: var(--text-heading);
 }
 .card-badges { display: flex; gap: 0.4rem; align-items: center; flex-shrink: 0; }
 .badge {
@@ -263,24 +568,24 @@ body {
     font-weight: 500;
     text-transform: uppercase;
 }
-.badge-draft { background: #fef3cd; color: #856404; }
-.badge-active { background: #d1ecf1; color: #0c5460; }
-.badge-publication { background: #d4edda; color: #155724; }
+.badge-draft { background: var(--badge-draft-bg); color: var(--badge-draft-text); }
+.badge-active { background: var(--badge-active-bg); color: var(--badge-active-text); }
+.badge-publication { background: var(--badge-pub-bg); color: var(--badge-pub-text); }
 .status-badge { cursor: pointer; }
-.status-badge:hover { filter: brightness(0.9); }
+.status-badge:hover { filter: var(--badge-hover-filter); }
 .badge-stale {
-    background: #f8d7da;
-    color: #721c24;
+    background: var(--badge-stale-bg);
+    color: var(--badge-stale-text);
     font-size: 0.65rem;
 }
 .badge-figure-id {
-    background: #e8e0f0;
-    color: #4a2d6e;
+    background: var(--badge-figure-id-bg);
+    color: var(--badge-figure-id-text);
     font-family: monospace;
 }
 .badge-pipeline {
-    background: #eef2f7;
-    color: #425a70;
+    background: var(--badge-pipeline-bg);
+    color: var(--badge-pipeline-text);
     font-family: monospace;
     letter-spacing: 0.04em;
 }
@@ -288,7 +593,7 @@ body {
 .card-description {
     padding: 0.8rem 1.2rem;
     font-size: 0.9rem;
-    color: #555;
+    color: var(--text-secondary);
     line-height: 1.5;
 }
 
@@ -303,6 +608,42 @@ body {
     border-radius: 4px;
 }
 
+/* ── Plot mount ─────────────────────────────────────────────
+   Frames each baked-PNG figure as a "print on a wall": shrink-
+   to-fit, theme-aware paper background, hairline border, soft
+   shadow. In dark mode the mount becomes a warm off-white panel
+   so the white-canvas plot reads as intentional composition
+   instead of a harsh broken rectangle. */
+.plot-mount {
+    display: inline-block;
+    background: var(--plot-mount-bg);
+    border: 1px solid var(--plot-mount-border);
+    border-radius: var(--plot-mount-radius);
+    padding: var(--plot-mount-pad);
+    box-shadow: var(--plot-mount-shadow);
+    margin: 0;
+    max-width: 100%;
+    transition: box-shadow 220ms ease,
+                background-color 180ms ease,
+                border-color 180ms ease,
+                padding 220ms ease;
+}
+.plot-mount img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 2px;
+    /* Cancel the .card-output img radius so the figure sits
+       flush against the mount's inner edges in dark mode. */
+}
+/* Subtle pull-in on hover so the figure feels "alive" in dark mode
+   without being noisy. */
+[data-theme="dark"] .card-output:hover .plot-mount {
+    box-shadow:
+        0 4px 24px rgba(0, 0, 0, 0.5),
+        0 0 0 1px oklch(0.50 0.010 85 / 0.55);
+}
+
 /* Image action buttons */
 .img-actions {
     display: flex;
@@ -315,15 +656,15 @@ body {
 .card-output:hover .img-actions { opacity: 1; }
 .img-action-btn {
     padding: 0.2rem 0.6rem;
-    background: #f0f0f0;
-    border: 1px solid #ddd;
+    background: var(--bg-hover);
+    border: 1px solid var(--border-input);
     border-radius: 3px;
     font-size: 0.7rem;
-    color: #555;
+    color: var(--text-secondary);
     cursor: pointer;
     transition: all 0.15s;
 }
-.img-action-btn:hover { background: #e0e0e0; color: #333; }
+.img-action-btn:hover { background: var(--border-default); color: var(--text-primary); }
 .card-output-table-wrapper {
     overflow-x: auto;
     overflow-y: auto;
@@ -338,27 +679,27 @@ body {
 }
 .card-output th {
     padding: 0.4rem 0.8rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-input);
     text-align: left;
     white-space: nowrap;
 }
 .card-output td {
     padding: 0.4rem 0.8rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-input);
     text-align: left;
     word-wrap: break-word;
     overflow-wrap: break-word;
     max-width: 500px;
 }
-.card-output th { background: #f8f9fa; font-weight: 600; }
+.card-output th { background: var(--bg-subtle); font-weight: 600; }
 .no-output {
     padding: 2rem;
-    color: #aaa;
+    color: var(--text-faint-3);
     font-style: italic;
 }
 
 /* Expandable sections */
-.expandable { border-top: 1px solid #f0f0f0; }
+.expandable { border-top: 1px solid var(--border-subtle); }
 .expandable-header {
     padding: 0.6rem 1.2rem;
     display: flex;
@@ -368,10 +709,10 @@ body {
     user-select: none;
     font-size: 0.8rem;
     font-weight: 500;
-    color: #7f8c8d;
+    color: var(--text-muted);
     transition: background 0.15s;
 }
-.expandable-header:hover { background: #f8f9fa; }
+.expandable-header:hover { background: var(--bg-subtle); }
 .expandable-header .arrow {
     transition: transform 0.2s;
     font-size: 0.7rem;
@@ -387,14 +728,14 @@ body {
 .methodology-text {
     font-size: 0.85rem;
     line-height: 1.6;
-    color: #555;
+    color: var(--text-secondary);
 }
 
 /* Code */
 .code-container { position: relative; }
 .code-block {
-    background: #1e1e2e;
-    color: #cdd6f4;
+    background: var(--bg-code);
+    color: var(--text-on-code);
     padding: 1rem;
     border-radius: 6px;
     overflow-x: auto;
@@ -409,14 +750,14 @@ body {
     top: 0.5rem;
     right: 0.5rem;
     padding: 0.25rem 0.5rem;
-    background: rgba(255,255,255,0.1);
-    border: 1px solid rgba(255,255,255,0.2);
+    background: var(--overlay-on-dark-1);
+    border: 1px solid var(--overlay-on-dark-3);
     border-radius: 3px;
-    color: #cdd6f4;
+    color: var(--text-on-code);
     font-size: 0.7rem;
     cursor: pointer;
 }
-.copy-btn:hover { background: rgba(255,255,255,0.2); }
+.copy-btn:hover { background: var(--overlay-on-dark-3); }
 .code-block.expanded { max-height: 80vh; }
 .code-expand-btn {
     margin-top: 0.3rem;
@@ -425,8 +766,8 @@ body {
 /* ── Run All button ───────────────────────────────────── */
 .btn-run-all {
     padding: 0.3rem 0.8rem;
-    background: #27ae60;
-    color: #fff;
+    background: var(--success);
+    color: var(--text-on-accent);
     border: none;
     border-radius: 4px;
     font-size: 0.8rem;
@@ -434,34 +775,34 @@ body {
     cursor: pointer;
     transition: background 0.15s;
 }
-.btn-run-all:hover { background: #219a52; }
-.btn-run-all:disabled { background: #95a5a6; cursor: not-allowed; }
+.btn-run-all:hover { background: var(--success-hover); }
+.btn-run-all:disabled { background: var(--neutral); cursor: not-allowed; }
 
 /* Notes */
 .notes-expandable .expandable-body {
-    background: #fffef5;
+    background: var(--bg-notes);
 }
 .notes-header-label {
-    color: #b8860b;
+    color: var(--notes-accent);
     display: flex;
     align-items: center;
     gap: 0.4rem;
 }
 .notes-dot {
     width: 6px; height: 6px;
-    background: #b8860b;
+    background: var(--notes-accent);
     border-radius: 50%;
     display: inline-block;
 }
 .notes-content {
     font-size: 0.85rem;
     line-height: 1.5;
-    color: #666;
+    color: var(--text-secondary-soft);
 }
 .notes-content p { margin-bottom: 0.5rem; }
 .notes-empty {
     font-size: 0.85rem;
-    color: #bbb;
+    color: var(--text-faintest);
     font-style: italic;
 }
 .notes-textarea {
@@ -471,13 +812,13 @@ body {
     font-size: 0.85rem;
     line-height: 1.5;
     padding: 0.6rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-input);
     border-radius: 4px;
     resize: vertical;
-    background: #fff;
-    color: #333;
+    background: var(--bg-input);
+    color: var(--text-primary);
 }
-.notes-textarea:focus { outline: none; border-color: #b8860b; }
+.notes-textarea:focus { outline: none; border-color: var(--notes-accent); }
 .notes-btn-bar {
     display: flex;
     gap: 0.4rem;
@@ -487,51 +828,51 @@ body {
 /* Tags (main rules in hover-visible section below) */
 .tag {
     padding: 0.1rem 0.4rem;
-    background: #f0f0f0;
+    background: var(--bg-hover);
     border-radius: 2px;
     font-size: 0.7rem;
-    color: #888;
+    color: var(--text-faint);
 }
 
 /* ── Stats summary ─────────────────────────────────────── */
 .stats-summary {
     padding: 0.5rem 1.2rem;
     font-size: 0.8rem;
-    color: #666;
+    color: var(--text-secondary-soft);
     display: flex;
     flex-wrap: wrap;
     gap: 1rem;
 }
 .stat-item { display: flex; gap: 0.3rem; }
-.stat-label { font-weight: 500; color: #888; }
+.stat-label { font-weight: 500; color: var(--text-faint); }
 .stat-value { font-family: monospace; }
 
 /* ── Buttons (used by live mode) ────────────────────────── */
 .btn {
     padding: 0.3rem 0.8rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-input);
     border-radius: 4px;
     font-size: 0.8rem;
     cursor: pointer;
     transition: all 0.15s;
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-run { background: #27ae60; color: #fff; border-color: #27ae60; }
-.btn-run:hover:not(:disabled) { background: #219a52; }
-.btn-save { background: #3498db; color: #fff; border-color: #3498db; }
-.btn-save:hover:not(:disabled) { background: #2980b9; }
-.btn-edit { background: #f39c12; color: #fff; border-color: #f39c12; }
-.btn-edit:hover:not(:disabled) { background: #d68910; }
-.btn-cancel { background: #95a5a6; color: #fff; border-color: #95a5a6; }
-.btn-cancel:hover:not(:disabled) { background: #7f8c8d; }
+.btn-run { background: var(--success); color: var(--text-on-accent); border-color: var(--success); }
+.btn-run:hover:not(:disabled) { background: var(--success-hover); }
+.btn-save { background: var(--accent); color: var(--text-on-accent); border-color: var(--accent); }
+.btn-save:hover:not(:disabled) { background: var(--accent-hover); }
+.btn-edit { background: var(--warning); color: var(--text-on-accent); border-color: var(--warning); }
+.btn-edit:hover:not(:disabled) { background: var(--warning-hover); }
+.btn-cancel { background: var(--neutral); color: var(--text-on-accent); border-color: var(--neutral); }
+.btn-cancel:hover:not(:disabled) { background: var(--neutral-hover); }
 
 .error-display {
     padding: 1rem 1.2rem;
-    background: #fff5f5;
-    border-top: 2px solid #e74c3c;
+    background: var(--danger-bg);
+    border-top: 2px solid var(--danger);
     font-family: monospace;
     font-size: 0.8rem;
-    color: #c0392b;
+    color: var(--danger-text);
     white-space: pre-wrap;
     display: none;
     max-height: 300px;
@@ -542,7 +883,7 @@ body {
 .run-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(255,255,255,0.85);
+    background: var(--overlay-run);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -551,8 +892,8 @@ body {
 }
 .run-overlay .spinner {
     width: 24px; height: 24px;
-    border: 3px solid #ddd;
-    border-top-color: #27ae60;
+    border: 3px solid var(--spinner-ring);
+    border-top-color: var(--success);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
 }
@@ -564,8 +905,8 @@ body {
     position: fixed;
     bottom: 1rem;
     right: 1rem;
-    background: rgba(0,0,0,0.7);
-    color: #fff;
+    background: var(--overlay-kbd-hint);
+    color: var(--text-on-accent);
     padding: 0.5rem 0.8rem;
     border-radius: 4px;
     font-size: 0.75rem;
@@ -578,7 +919,7 @@ body {
 /* ── Collection title ─────────────────────────────────── */
 .collection-title {
     font-size: 1.5rem;
-    color: #2c3e50;
+    color: var(--text-heading);
     margin-bottom: 0.2rem;
     font-weight: 700;
     cursor: default;
@@ -586,8 +927,8 @@ body {
 .collection-title-input {
     font-size: 1.5rem;
     font-weight: 700;
-    color: #2c3e50;
-    border: 1px solid #3498db;
+    color: var(--text-heading);
+    border: 1px solid var(--accent);
     border-radius: 4px;
     padding: 0.1rem 0.3rem;
     outline: none;
@@ -599,7 +940,7 @@ body {
 /* ── Group subtitle on cards ──────────────────────────── */
 .card-group-label {
     font-size: 0.72rem;
-    color: #999;
+    color: var(--text-faint-2);
     padding: 0 1.2rem 0.2rem;
 }
 
@@ -623,17 +964,17 @@ body {
     border-radius: 3px;
     transition: background 0.15s;
 }
-.lib-file-item:hover { background: #f0f0f0; }
+.lib-file-item:hover { background: var(--bg-hover); }
 .lib-code-panel {
     display: none;
     position: fixed;
     top: 0; right: 0;
     width: 50vw;
     height: 100vh;
-    background: #1e1e2e;
+    background: var(--bg-code);
     z-index: 100;
     overflow-y: auto;
-    box-shadow: -4px 0 20px rgba(0,0,0,0.2);
+    box-shadow: var(--shadow-panel);
 }
 .lib-code-panel.open { display: block; }
 .lib-code-header {
@@ -641,8 +982,8 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 0.8rem 1rem;
-    background: #2d2d44;
-    color: #cdd6f4;
+    background: var(--bg-code-header);
+    color: var(--text-on-code);
     font-family: "SF Mono", monospace;
     font-size: 0.85rem;
     position: sticky;
@@ -652,18 +993,18 @@ body {
 .lib-code-close {
     background: none;
     border: none;
-    color: #cdd6f4;
+    color: var(--text-on-code);
     font-size: 1.2rem;
     cursor: pointer;
     padding: 0.2rem 0.5rem;
 }
-.lib-code-close:hover { color: #fff; }
+.lib-code-close:hover { color: var(--text-on-accent); }
 .lib-code-body {
     padding: 1rem;
     font-family: "SF Mono", "Fira Code", monospace;
     font-size: 0.8rem;
     line-height: 1.5;
-    color: #cdd6f4;
+    color: var(--text-on-code);
 }
 
 /* ── Editable group/tag UI ────────────────────────────── */
@@ -672,15 +1013,15 @@ body {
     position: relative;
     display: inline-block;
 }
-.card-group-label:hover { color: #666; text-decoration: underline dotted; }
+.card-group-label:hover { color: var(--text-secondary-soft); text-decoration: underline dotted; }
 .group-dropdown {
     position: absolute;
     top: 100%;
     left: 0;
-    background: #fff;
-    border: 1px solid #ddd;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-input);
     border-radius: 4px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    box-shadow: var(--shadow-dropdown);
     z-index: 50;
     min-width: 160px;
     max-height: 200px;
@@ -694,13 +1035,13 @@ body {
     cursor: pointer;
     transition: background 0.1s;
 }
-.group-dropdown-item:hover { background: #f0f0f0; }
-.group-dropdown-item.active { background: #ebf5fb; color: #2980b9; font-weight: 500; }
+.group-dropdown-item:hover { background: var(--bg-hover); }
+.group-dropdown-item.active { background: var(--accent-tint); color: var(--accent-hover); font-weight: 500; }
 .group-dropdown-input {
     width: calc(100% - 1rem);
     margin: 0.3rem 0.5rem;
     padding: 0.3rem 0.5rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--border-input);
     border-radius: 3px;
     font-size: 0.8rem;
 }
@@ -712,20 +1053,20 @@ body {
     font-size: 0.65rem;
 }
 .card:hover .tag-remove, .card.focused .tag-remove { opacity: 0.6; }
-.tag-remove:hover { opacity: 1; color: #e74c3c; }
+.tag-remove:hover { opacity: 1; color: var(--danger); }
 .tag-add-btn {
     padding: 0.1rem 0.4rem;
     background: none;
-    border: 1px dashed #ccc;
+    border: 1px dashed var(--border-input-dashed);
     border-radius: 2px;
     font-size: 0.7rem;
-    color: #aaa;
+    color: var(--text-faint-3);
     cursor: pointer;
 }
-.tag-add-btn:hover { border-color: #999; color: #666; }
+.tag-add-btn:hover { border-color: var(--text-faint-2); color: var(--text-secondary-soft); }
 .tag-add-input {
     padding: 0.1rem 0.3rem;
-    border: 1px solid #3498db;
+    border: 1px solid var(--accent);
     border-radius: 2px;
     font-size: 0.7rem;
     width: 80px;
@@ -740,7 +1081,7 @@ body {
     cursor: pointer;
     padding: 0.25rem 0.4rem;
     font-size: 0.78rem;
-    color: #7f8c8d;
+    color: var(--text-muted);
     border-radius: 3px;
     user-select: none;
     display: flex;
@@ -748,11 +1089,11 @@ body {
     gap: 0.35rem;
 }
 .sidebar-tree summary::-webkit-details-marker { display: none; }
-.sidebar-tree summary:hover { background: #f0f0f0; }
+.sidebar-tree summary:hover { background: var(--bg-hover); }
 .sidebar-tree summary::before {
     content: '▸';
     font-size: 0.6rem;
-    color: #bbb;
+    color: var(--text-faintest);
     transition: transform 0.15s;
     display: inline-block;
     width: 0.7rem;
@@ -761,7 +1102,7 @@ body {
 .sidebar-tree .tree-label { flex: 1; min-width: 0; }
 .sidebar-tree .tree-count {
     font-size: 0.68rem;
-    color: #aab;
+    color: var(--text-faint-blue);
     font-variant-numeric: tabular-nums;
 }
 .sidebar-tree .tree-body { padding-left: 1.1rem; }
@@ -769,7 +1110,7 @@ body {
     padding: 0.2rem 0.4rem;
     font-size: 0.77rem;
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
-    color: #555;
+    color: var(--text-secondary);
     cursor: pointer;
     border-radius: 3px;
     transition: background 0.12s, color 0.12s;
@@ -777,25 +1118,25 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.sidebar-tree .tree-file:hover { background: #eef3f7; color: #2c3e50; }
+.sidebar-tree .tree-file:hover { background: var(--bg-hover-cool); color: var(--text-heading); }
 .sidebar-tree .tree-file.active {
-    background: #d3e4f5;
-    color: #1a6199;
+    background: var(--bg-tree-active);
+    color: var(--text-tree-active);
     font-weight: 600;
-    box-shadow: inset 3px 0 0 #3498db;
+    box-shadow: inset 3px 0 0 var(--accent);
 }
-.sidebar-tree .tree-file.dim { color: #a0a8b0; }
+.sidebar-tree .tree-file.dim { color: var(--text-tree-faint); }
 
 /* Sidebar splitter (resizable boundary) */
 .splitter {
     width: 4px;
     cursor: col-resize;
     background: transparent;
-    border-right: 1px solid #e0e0e0;
+    border-right: 1px solid var(--border-default);
     transition: background 0.12s;
     flex-shrink: 0;
 }
-.splitter:hover, .splitter.dragging { background: #dfeaf4; }
+.splitter:hover, .splitter.dragging { background: var(--bg-splitter-hover); }
 body.splitter-dragging {
     cursor: col-resize !important;
     user-select: none;
@@ -805,13 +1146,13 @@ body.splitter-dragging * { user-select: none !important; }
 /* ── Lineage breadcrumb strip ─────────────────────────── */
 .lineage {
     padding: 0.5rem 1.2rem 0.6rem;
-    border-top: 1px solid #f7f7fa;
+    border-top: 1px solid var(--border-very-subtle);
     display: flex;
     align-items: center;
     gap: 0.6rem;
     font-size: 0.76rem;
     line-height: 1.2;
-    color: #8a93a6;
+    color: var(--text-muted-cool);
     overflow: hidden;
     position: relative;
 }
@@ -819,7 +1160,7 @@ body.splitter-dragging * { user-select: none !important; }
     font-size: 0.65rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #aab4c4;
+    color: var(--text-faint-cool);
     flex-shrink: 0;
     font-weight: 600;
 }
@@ -839,7 +1180,7 @@ body.splitter-dragging * { user-select: none !important; }
 .lineage-segment {
     font-family: "SF Mono", "Fira Code", "Consolas", monospace;
     font-size: 0.77rem;
-    color: #8a93a6;
+    color: var(--text-muted-cool);
     background: none;
     border: none;
     padding: 0.18rem 0.3rem;
@@ -854,44 +1195,44 @@ body.splitter-dragging * { user-select: none !important; }
     flex-shrink: 0;
 }
 .lineage-segment:hover {
-    color: #3498db;
+    color: var(--accent);
     opacity: 1;
     max-width: 40ch;
-    background: #f4f8fb;
+    background: var(--bg-lineage-hover);
 }
 .lineage-segment.is-pipeline::before {
     content: '◆';
-    color: #b8c1d1;
+    color: var(--text-lineage-diamond);
     margin-right: 0.3rem;
     font-size: 0.7rem;
     vertical-align: 2%;
 }
 .lineage-segment.is-current {
-    color: #2c3e50;
-    background: rgba(52, 152, 219, 0.08);
+    color: var(--text-heading);
+    background: var(--accent-ring-soft);
     font-weight: 600;
     cursor: default;
     opacity: 1;
 }
-.lineage-segment.is-current:hover { background: rgba(52, 152, 219, 0.08); color: #2c3e50; }
+.lineage-segment.is-current:hover { background: var(--accent-ring-soft); color: var(--text-heading); }
 .lineage-sep {
     font-family: "SF Mono", "Fira Code", monospace;
-    color: #cbd2dc;
+    color: var(--text-lineage-sep);
     font-size: 0.85rem;
     flex-shrink: 0;
     pointer-events: none;
 }
 .card-flash { animation: cardFlash 0.6s ease-out; }
 @keyframes cardFlash {
-    0%   { box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.55); }
-    100% { box-shadow: 0 0 0 0 rgba(52, 152, 219, 0); }
+    0%   { box-shadow: 0 0 0 3px var(--accent-ring); }
+    100% { box-shadow: 0 0 0 0 transparent; }
 }
 
 /* ── Tabbed code panel ────────────────────────────────── */
 .code-tabs {
     display: flex;
     gap: 0.1rem;
-    border-bottom: 1px solid #e5e8ed;
+    border-bottom: 1px solid var(--border-tab);
     margin-bottom: 0.6rem;
     align-items: flex-end;
     flex-wrap: wrap;
@@ -903,7 +1244,7 @@ body.splitter-dragging * { user-select: none !important; }
     padding: 0.4rem 0.75rem;
     font-size: 0.78rem;
     font-family: "SF Mono", "Fira Code", monospace;
-    color: #8a93a6;
+    color: var(--text-muted-cool);
     cursor: pointer;
     transition: color 0.12s, border-color 0.12s;
     display: inline-flex;
@@ -914,21 +1255,21 @@ body.splitter-dragging * { user-select: none !important; }
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.code-tab:hover { color: #2c3e50; }
+.code-tab:hover { color: var(--text-heading); }
 .code-tab.active {
-    color: #2c3e50;
-    border-bottom-color: #3498db;
+    color: var(--text-heading);
+    border-bottom-color: var(--accent);
     font-weight: 600;
 }
 .code-tab.is-shared::before {
     content: '◇';
-    color: #a4acb9;
+    color: var(--text-shared-diamond);
     font-size: 0.8rem;
 }
-.code-tab.active.is-shared::before { color: #3498db; }
+.code-tab.active.is-shared::before { color: var(--accent); }
 .code-tab-used-by {
     font-size: 0.65rem;
-    color: #aab4c4;
+    color: var(--text-faint-cool);
     font-weight: 400;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     margin-left: 0.25rem;
@@ -942,7 +1283,7 @@ body.splitter-dragging * { user-select: none !important; }
     gap: 0.5rem;
     padding: 0.3rem 0.15rem 0.55rem;
     font-size: 0.72rem;
-    color: #8a93a6;
+    color: var(--text-muted-cool);
     flex-wrap: wrap;
 }
 .shared-pane-header .shared-tag {
@@ -953,14 +1294,14 @@ body.splitter-dragging * { user-select: none !important; }
 }
 .shared-pane-header .shared-tag .ro-dot {
     width: 6px; height: 6px;
-    background: #d4a574;
+    background: var(--ro-dot);
     border-radius: 50%;
     display: inline-block;
 }
 .jump-to-sidebar-btn {
     background: none;
-    border: 1px solid #dbe2ea;
-    color: #5a6475;
+    border: 1px solid var(--border-jump-btn);
+    color: var(--text-jump-btn);
     font-size: 0.72rem;
     padding: 0.22rem 0.55rem;
     border-radius: 3px;
@@ -969,9 +1310,9 @@ body.splitter-dragging * { user-select: none !important; }
     font-family: inherit;
 }
 .jump-to-sidebar-btn:hover {
-    border-color: #3498db;
-    color: #3498db;
-    background: #f4f8fb;
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--bg-lineage-hover);
 }
 
 /* ── Pygments syntax highlighting ──────────────────────── */
@@ -1098,6 +1439,14 @@ body.splitter-dragging * { user-select: none !important; }
         <h2 id="currentView">All Analyses</h2>
         <div style="display:flex;align-items:center;gap:0.8rem;">
             <span class="card-count" id="cardCount">{{ total_count }} analyses</span>
+            <button type="button"
+                    class="theme-toggle"
+                    id="themeToggle"
+                    onclick="toggleTheme()"
+                    aria-label="Toggle dark mode"
+                    title="Toggle dark mode (press D)">
+                <span class="theme-toggle-icon" aria-hidden="true"></span>
+            </button>
             <button class="filter-btn" onclick="collapseAll()">Collapse All</button>
             <button class="filter-btn" onclick="expandAll()">Expand All</button>
             <button class="btn-run-all" id="runAllStaleBtn" onclick="runAllStale()" style="display:none;">Run All Stale</button>
@@ -1160,7 +1509,9 @@ body.splitter-dragging * { user-select: none !important; }
 
         <div class="card-output" data-slug="{{ card.slug }}">
             {% if card.output_image %}
-                <img src="{{ card.output_image }}" alt="{{ card.title }}">
+                <figure class="plot-mount">
+                    <img src="{{ card.output_image }}" alt="{{ card.title }}">
+                </figure>
                 <div class="img-actions">
                     <button class="img-action-btn" onclick="copyFigure(this)">Copy Figure</button>
                     <button class="img-action-btn" onclick="openFigure(this)">Open in Window</button>
@@ -1288,7 +1639,7 @@ body.splitter-dragging * { user-select: none !important; }
 </main>
 
 <div class="keyboard-hint" id="keyboardHint">
-    <strong>j</strong>/<strong>k</strong> navigate &nbsp; <strong>c</strong> collapse card &nbsp; <strong>C</strong> collapse all &nbsp; <strong>e</strong> code &nbsp; <strong>m</strong> methodology &nbsp; <strong>s</strong> stats &nbsp; <strong>n</strong> notes &nbsp; <strong>Esc</strong> close sections &nbsp; <strong>/</strong> search
+    <strong>j</strong>/<strong>k</strong> navigate &nbsp; <strong>c</strong> collapse card &nbsp; <strong>C</strong> collapse all &nbsp; <strong>e</strong> code &nbsp; <strong>m</strong> methodology &nbsp; <strong>s</strong> stats &nbsp; <strong>n</strong> notes &nbsp; <strong>d</strong> dark mode &nbsp; <strong>Esc</strong> close sections &nbsp; <strong>/</strong> search
 </div>
 
 <script>
@@ -1592,9 +1943,11 @@ function openFigure(btn) {
     const title = card ? card.querySelector('.card-title').textContent : slug;
     const w = window.open('', '_blank');
     const d = w.document;
+    const canvasBg = getComputedStyle(document.documentElement)
+                        .getPropertyValue('--bg-canvas').trim() || '#f5f6fa';
     d.open();
     d.write('<!DOCTYPE html><html><head><title>' + title + '<' + '/title>');
-    d.write('<' + 'style>body{margin:0;background:#f5f6fa;display:flex;align-items:center;justify-content:center;min-height:100vh}');
+    d.write('<' + 'style>body{margin:0;background:' + canvasBg + ';display:flex;align-items:center;justify-content:center;min-height:100vh}');
     d.write('img{max-width:95vw;max-height:95vh;object-fit:contain}<' + '/style>');
     d.write('<' + '/head><body><img src="' + img.src + '" alt="' + title + '"><' + '/body><' + '/html>');
     d.close();
@@ -2028,6 +2381,11 @@ document.addEventListener('keydown', e => {
             e.preventDefault();
             break;
         }
+        case 'd': {
+            toggleTheme();
+            e.preventDefault();
+            break;
+        }
         case '?': {
             const hint = document.getElementById('keyboardHint');
             hint.classList.toggle('visible');
@@ -2037,6 +2395,19 @@ document.addEventListener('keydown', e => {
         }
     }
 });
+
+/* ── Theme toggle ──────────────────────────────────────────
+   The initial theme is set by the inline <head> script before
+   any paint; this function just flips the data-theme attribute
+   and persists the explicit choice. Once the user toggles, the
+   stored value wins over prefers-color-scheme on future loads. */
+function toggleTheme() {
+    const root = document.documentElement;
+    const next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    root.style.colorScheme = next;
+    try { localStorage.setItem('labdash-theme', next); } catch (e) {}
+}
 
 /* ── Persistent collapse state ─────────────────────────── */
 const COLLAPSE_KEY = 'labdash-collapsed';
@@ -2715,7 +3086,12 @@ function applyRunPayload(slug, data) {
     if (data.success) {
         if (errorEl) errorEl.style.display = 'none';
         if (data.image && outputDiv) {
-            outputDiv.innerHTML = '<img src="' + data.image + '" alt="' + slug + '">';
+            outputDiv.innerHTML =
+                '<figure class="plot-mount"><img src="' + data.image + '" alt="' + slug + '"></figure>'
+                + '<div class="img-actions">'
+                + '<button class="img-action-btn" onclick="copyFigure(this)">Copy Figure</button>'
+                + '<button class="img-action-btn" onclick="openFigure(this)">Open in Window</button>'
+                + '</div>';
         } else if (data.table_html && outputDiv) {
             outputDiv.innerHTML = '<div class="card-output-table-wrapper">' + data.table_html + '</div>';
         }

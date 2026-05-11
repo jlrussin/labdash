@@ -968,7 +968,12 @@ window.reloadData = async function() {
                     }
                     if (data.success) {
                         if (data.image) {
-                            outputDiv.innerHTML = '<img src="' + data.image + '" alt="' + slug + '">';
+                            outputDiv.innerHTML =
+                                '<figure class="plot-mount"><img src="' + data.image + '" alt="' + slug + '"><' + '/figure>'
+                                + '<div class="img-actions">'
+                                + '<button class="img-action-btn" onclick="copyFigure(this)">Copy Figure<' + '/button>'
+                                + '<button class="img-action-btn" onclick="openFigure(this)">Open in Window<' + '/button>'
+                                + '<' + '/div>';
                         } else if (data.table_html) {
                             outputDiv.innerHTML = '<div class="card-output-table-wrapper">' + data.table_html + '<' + '/div>';
                         }

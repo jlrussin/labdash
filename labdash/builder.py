@@ -47,7 +47,7 @@ def _image_to_data_uri(path: Path) -> str | None:
     return f"data:{mime};base64,{data}"
 
 
-PYGMENTS_STYLE = "monokai"
+PYGMENTS_STYLE = "one-dark"
 
 
 def _highlight_python(code: str) -> str:
