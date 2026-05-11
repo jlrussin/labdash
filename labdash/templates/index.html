@@ -668,95 +668,66 @@ body {
     transition: all 0.15s;
 }
 .img-action-btn:hover { background: var(--border-default); color: var(--text-primary); }
-/* ── Statistical tables ────────────────────────────────────
-   Custom output.html often packages a title, table, summary,
-   and methodology together in one document. The table itself
-   gets a distinct chrome: clearly elevated wrapper with visible
-   border, an accent-tinted bright-text header, horizontal-only
-   row dividers, and tabular-nums numeric alignment.
-   Also overrides pandas' legacy <table border="1"> attribute. */
+/* ── Table mount ────────────────────────────────────────────
+   Mirrors the plot-mount approach: analyst-emitted output.html
+   carries its own light-mode styling (light bg, dark text, baked
+   inline colors). Rather than fight those, wrap the entire blob
+   in a "light island" — warm off-white panel in dark mode, just
+   like the plot mount — so the analyst's HTML renders as
+   intended regardless of the surrounding theme. */
 .card-output-table-wrapper {
     overflow-x: auto;
     overflow-y: auto;
-    max-height: 500px;
+    max-height: 600px;
     margin: 0.6rem 0;
-    border: 1px solid var(--border-default);
-    border-radius: 6px;
-    background: var(--bg-elevated);
+    padding: 1rem 1.2rem;
+    background: var(--plot-mount-bg);
+    border: 1px solid var(--plot-mount-border);
+    border-radius: var(--plot-mount-radius);
+    box-shadow: var(--plot-mount-shadow);
+    /* Force a light-mode text color regardless of the page theme so
+       the analyst's expected dark-on-light contrast is preserved. */
+    color: #1a1a2e;
+    transition: box-shadow 220ms ease,
+                background-color 180ms ease,
+                border-color 180ms ease;
 }
-.card-output table,
-.card-output table[border] {
-    margin: 0;
-    border: 0;
+
+/* Default table styling — the simple light-mode look from before
+   dark mode existed. The mount above provides the light canvas; we
+   don't theme these rules with --var() because the mount interior
+   is intentionally a light island in both themes. */
+.card-output-table-wrapper table {
+    margin: 0 auto;
     border-collapse: collapse;
     font-size: 0.85rem;
     width: 100%;
     table-layout: auto;
-    color: var(--text-primary);
-    background: transparent;
 }
-.card-output th,
-.card-output td {
-    padding: 0.6rem 0.95rem;
-    border: 0;
+.card-output-table-wrapper th {
+    padding: 0.4rem 0.8rem;
+    border: 1px solid #ddd;
     text-align: left;
-    vertical-align: top;
-}
-.card-output thead th {
-    background: var(--accent-tint);
-    color: var(--text-primary);
-    font-weight: 700;
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    border-bottom: 2px solid var(--accent);
     white-space: nowrap;
-    position: sticky;
-    top: 0;
-    z-index: 1;
+    background: #f8f9fa;
+    font-weight: 600;
 }
-.card-output tbody tr   { border-bottom: 1px solid var(--border-subtle); }
-.card-output tbody tr:last-child { border-bottom: 0; }
-.card-output tbody td {
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
+.card-output-table-wrapper td {
+    padding: 0.4rem 0.8rem;
+    border: 1px solid #ddd;
+    text-align: left;
     word-wrap: break-word;
     overflow-wrap: break-word;
     max-width: 500px;
 }
-.card-output tbody tr:hover td { background: var(--accent-tint-soft); }
 
-/* Custom analyst HTML often emits headings / paragraphs / lists
-   alongside the table inside the same output.html. Set sane
-   defaults so prose reads as part of the labdash hierarchy. */
-.card-output-table-wrapper h1,
-.card-output-table-wrapper h2,
-.card-output-table-wrapper h3,
-.card-output-table-wrapper h4 {
-    color: var(--text-heading);
-    font-weight: 600;
-    margin: 0.6rem 0.4rem;
+/* Same hover effect on the mount as on plot mounts in dark mode so
+   tables feel like part of the same primitive. */
+[data-theme="dark"] .card-output:hover .card-output-table-wrapper {
+    box-shadow:
+        0 4px 24px rgba(0, 0, 0, 0.5),
+        0 0 0 1px oklch(0.50 0.010 85 / 0.55);
 }
-.card-output-table-wrapper h1 { font-size: 1.05rem; }
-.card-output-table-wrapper h2 { font-size: 0.95rem; }
-.card-output-table-wrapper h3 { font-size: 0.85rem; }
-.card-output-table-wrapper h4 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); }
-.card-output-table-wrapper p,
-.card-output-table-wrapper li {
-    color: var(--text-secondary);
-    font-size: 0.85rem;
-    line-height: 1.55;
-    margin: 0.35rem 0.4rem;
-}
-.card-output-table-wrapper strong { color: var(--text-primary); }
-.card-output-table-wrapper details > summary {
-    color: var(--text-secondary);
-    font-size: 0.8rem;
-    padding: 0.4rem;
-    cursor: pointer;
-    user-select: none;
-}
-.card-output-table-wrapper details > summary:hover { color: var(--text-primary); }
 .no-output {
     padding: 2rem;
     color: var(--text-faint-3);
