@@ -214,6 +214,13 @@ class _State:
     stale_set: list[str] = field(default_factory=list)
     lib_error_active: bool = False
     agent_active: dict | None = None
+    # When the server is mid-rename of a group, this is set; the watcher
+    # events for the N+1 writes (registry + each affected meta.yaml) are
+    # absorbed silently and a single `group_renamed` event is published
+    # when the rename endpoint clears it. Shape:
+    #   {"old": "Performance", "new": "Performance metrics",
+    #    "slugs": {"a", "b", ...}}
+    pending_rename: dict | None = None
 
 
 class LiveTranslator:
@@ -256,6 +263,56 @@ class LiveTranslator:
         """Return a copy of the current agent_active state for the `hello` payload."""
         with self._lock:
             return dict(self._state.agent_active) if self._state.agent_active else None
+
+    # ── group rename coordination ────────────────────────────────────────
+
+    def begin_rename(self, old_name: str, new_name: str, slugs: set[str]) -> None:
+        """Mark a group rename as in-flight before the endpoint writes disk.
+
+        Eagerly updates the in-memory snapshot so the per-file watcher
+        events that follow (registry rename + each meta.yaml rewrite)
+        diff to no-ops against state. A single `group_renamed` event is
+        published from `end_rename_and_publish` when the writes are done.
+        """
+        with self._lock:
+            self._state.pending_rename = {
+                "old": old_name,
+                "new": new_name,
+                "slugs": set(slugs),
+            }
+            # Rename the group entry in the snapshot (preserve position
+            # and slug list verbatim).
+            for g in self._state.registry_groups:
+                if g["name"] == old_name:
+                    g["name"] = new_name
+                    break
+            # Flip group field on each affected slug's cached meta.
+            for slug in slugs:
+                meta = self._state.meta_by_slug.get(slug)
+                if meta is not None:
+                    meta["group"] = new_name
+
+    def end_rename_and_publish(self) -> None:
+        """Clear the in-flight flag and publish the single `group_renamed`
+        event. Safe to call from a `finally` clause; a no-op if no rename
+        is active (e.g. the endpoint short-circuited on validation)."""
+        with self._lock:
+            pending = self._state.pending_rename
+            if pending is None:
+                return
+            self._state.pending_rename = None
+            self.bus.publish({
+                "event": "group_renamed",
+                "data": {
+                    "old_name": pending["old"],
+                    "new_name": pending["new"],
+                },
+            })
+        try:
+            agent_context.sync(self.analyses_dir)
+        except Exception:
+            import traceback
+            traceback.print_exc()
 
     def handle(self, change: FileChange) -> None:
         """Translate one filesystem change to zero or more SSE events."""
@@ -365,6 +422,25 @@ class LiveTranslator:
                 self._emit_full_reload(f"meta.{k} changed for {change.slug}")
                 return
 
+        # Group change → emit `card_moved` and update the in-memory registry
+        # snapshot so a subsequent `_handle_registry` (when the server wrote
+        # the registry as part of the same change) sees a no-op diff.
+        old_group = old_meta.get("group", "Ungrouped")
+        new_group = new_meta.get("group", "Ungrouped")
+        group_changed = old_group != new_group
+
+        # Suppress the per-meta group flip that's part of a pending rename
+        # batch; the rename endpoint will publish one `group_renamed` event
+        # for the whole batch in `end_rename_and_publish`.
+        pending = self._state.pending_rename
+        in_pending_rename = (
+            group_changed
+            and pending is not None
+            and change.slug in pending["slugs"]
+            and old_group == pending["old"]
+            and new_group == pending["new"]
+        )
+
         # Surgical fields → diff and emit only what changed.
         fields_changed: dict[str, Any] = {}
         for k in _META_SURGICAL_FIELDS:
@@ -372,6 +448,22 @@ class LiveTranslator:
                 fields_changed[k] = new_meta.get(k)
 
         self._state.meta_by_slug[change.slug] = new_meta
+
+        if group_changed and not in_pending_rename:
+            # If the registry watcher already moved this slug (we see the
+            # snapshot reflects the new group), skip the duplicate event.
+            current_group_in_snapshot = self._slug_group_in_snapshot(change.slug)
+            if current_group_in_snapshot != new_group:
+                self._move_slug_in_snapshot(change.slug, new_group)
+                self.bus.publish({
+                    "event": "card_moved",
+                    "data": {
+                        "slug": change.slug,
+                        "new_group": new_group,
+                        "group_label": new_group,
+                        "before_slug": None,
+                    },
+                })
 
         if fields_changed:
             self.bus.publish({
@@ -385,6 +477,32 @@ class LiveTranslator:
         # Status changes can affect filter visibility but not staleness;
         # still cheap to recheck.
         self._recompute_stale_set(emit=True)
+
+    def _slug_group_in_snapshot(self, slug: str) -> str | None:
+        """Return the group name that holds `slug` in the in-memory snapshot,
+        or None if not present."""
+        for g in self._state.registry_groups:
+            if slug in g.get("analyses", []):
+                return g["name"]
+        return None
+
+    def _move_slug_in_snapshot(self, slug: str, new_group: str) -> None:
+        """Mutate `_state.registry_groups` so `slug` lives in `new_group`,
+        creating the group entry at the end if it doesn't yet exist."""
+        # Remove from any existing group.
+        for g in self._state.registry_groups:
+            analyses = g.get("analyses", [])
+            if slug in analyses:
+                analyses.remove(slug)
+        # Append to new group (creating it if needed).
+        for g in self._state.registry_groups:
+            if g["name"] == new_group:
+                g["analyses"].append(slug)
+                return
+        self._state.registry_groups.append({
+            "name": new_group,
+            "analyses": [slug],
+        })
 
     def _handle_agent_active(self, change: FileChange) -> None:
         if change.is_delete:
@@ -405,6 +523,17 @@ class LiveTranslator:
             return
 
         new_groups = _normalize_groups(load_registry(self.analyses_dir))
+
+        # If a group rename is in flight, the on-disk registry's only
+        # diff vs the snapshot should be the renamed group's name. The
+        # snapshot was eagerly updated in `begin_rename`, so this diff
+        # is normally empty. Either way, swallow events here — the
+        # endpoint publishes a single `group_renamed` from
+        # `end_rename_and_publish`.
+        if self._state.pending_rename is not None:
+            self._state.registry_groups = new_groups
+            return
+
         events = diff_registry(self._state.registry_groups, new_groups)
         self._state.registry_groups = new_groups
 

@@ -28,7 +28,7 @@ from .runner import (
     expand_with_stale_upstream,
     stale_only,
 )
-from .builder import build_dashboard, _scrub_baked_html
+from .builder import build_dashboard
 from . import agent_context
 from .live_events import EventBus, is_shutdown
 from .live_translator import LiveTranslator
@@ -83,6 +83,11 @@ class AgentNotesUpdate(BaseModel):
     agent_notes: str
 
 
+class RenameGroupUpdate(BaseModel):
+    old_name: str
+    new_name: str
+
+
 
 
 def _append_change_log(analyses_dir: Path, slug: str, change_type: str, details: str):
@@ -113,6 +118,69 @@ def _sync_registry(analyses_dir: Path):
     """Sync registry.yaml with current analyses on disk."""
     from .builder import _sync_registry as _builder_sync_registry
     _builder_sync_registry(analyses_dir)
+
+
+def _validate_rename_group(
+    analyses_dir: Path, old_name: str, new_name: str
+) -> tuple[str, list[str]]:
+    """Validate a rename request and return `(new_name_stripped, affected_slugs)`.
+
+    Raises `LookupError` if `old_name` is not a current registry group.
+    Raises `ValueError` for any other validation failure (empty new name,
+    reserved name, duplicate destination, registry in old format).
+    """
+    new_name_stripped = new_name.strip() if new_name else ""
+    if not new_name_stripped:
+        raise ValueError("new_name must be non-empty")
+    if new_name_stripped == old_name:
+        raise ValueError("new_name must differ from old_name")
+    if new_name_stripped.lower() == "all":
+        raise ValueError("'all' is reserved for the All-groups filter")
+
+    registry = load_registry(analyses_dir)
+    if registry is None or not _is_new_format_registry(registry):
+        raise ValueError("registry is missing or in old format; run labdash build first")
+
+    groups = registry.get("groups", [])
+    names = [g["name"] for g in groups]
+    if old_name not in names:
+        raise LookupError(f"group '{old_name}' not found in registry")
+    if new_name_stripped in names:
+        raise ValueError(f"a group named '{new_name_stripped}' already exists")
+
+    affected: list[str] = []
+    for g in groups:
+        if g["name"] == old_name:
+            affected = list(g.get("analyses", []))
+            break
+    return new_name_stripped, affected
+
+
+def _perform_group_rename(
+    analyses_dir: Path, old_name: str, new_name_stripped: str, affected: list[str]
+) -> None:
+    """Write the registry + meta.yaml updates for a rename. Assumes the
+    caller has already validated via `_validate_rename_group`.
+    """
+    registry = load_registry(analyses_dir) or {}
+    for g in registry.get("groups", []):
+        if g["name"] == old_name:
+            g["name"] = new_name_stripped
+            break
+    registry_path = analyses_dir / "registry.yaml"
+    with open(registry_path, "w") as f:
+        yaml.dump(registry, f, default_flow_style=False, sort_keys=False)
+
+    for slug in affected:
+        meta_path = analyses_dir / slug / "meta.yaml"
+        if not meta_path.exists():
+            continue
+        with open(meta_path) as f:
+            meta = yaml.safe_load(f) or {}
+        if meta.get("group") == old_name:
+            meta["group"] = new_name_stripped
+            with open(meta_path, "w") as f:
+                yaml.dump(meta, f, default_flow_style=False, sort_keys=False)
 
 
 def _move_slug_in_registry(analyses_dir: Path, slug: str, old_group: str | None, new_group: str):
@@ -234,7 +302,7 @@ def create_app(config: dict) -> FastAPI:
             payload["stats"] = json.loads(stats_path.read_text())
         table_path = slug_output / "output.html"
         if table_path.exists():
-            payload["table_html"] = _scrub_baked_html(table_path.read_text())
+            payload["table_html"] = table_path.read_text()
         return payload
 
     @app.post("/api/run/{slug}")
@@ -576,6 +644,48 @@ def create_app(config: dict) -> FastAPI:
         _sync_agent_context_safe(analyses_dir)
 
         return {"status": "saved"}
+
+    @app.post("/api/registry/rename-group")
+    def rename_group(update: RenameGroupUpdate):
+        """Atomically rename one group across registry.yaml and every
+        affected meta.yaml. Emits a single `group_renamed` SSE event.
+        """
+        old_name = update.old_name
+
+        # Validate before touching the translator so a 4xx response doesn't
+        # leave a stale `pending_rename` in flight.
+        try:
+            new_name_stripped, affected = _validate_rename_group(
+                analyses_dir, old_name, update.new_name
+            )
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            msg = str(e)
+            status = 409 if "already exists" in msg else 400
+            raise HTTPException(status, msg)
+
+        translator.begin_rename(old_name, new_name_stripped, set(affected))
+        try:
+            _perform_group_rename(analyses_dir, old_name, new_name_stripped, affected)
+
+            _append_change_log(
+                analyses_dir,
+                "(group rename)",
+                "group rename",
+                f"- Renamed group: `{old_name}` → `{new_name_stripped}` "
+                f"({len(affected)} analyses affected)",
+            )
+            _sync_agent_context_safe(analyses_dir)
+
+            return {
+                "status": "saved",
+                "old_name": old_name,
+                "new_name": new_name_stripped,
+                "affected": affected,
+            }
+        finally:
+            translator.end_rename_and_publish()
 
     @app.patch("/api/config")
     def update_config(update: ConfigUpdate):
