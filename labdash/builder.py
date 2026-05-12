@@ -382,20 +382,25 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
 
 
 def _sync_registry(analyses_dir: Path, analyses: list[dict] | None = None):
-    """Sync registry.yaml with analyses on disk. Never reorders existing entries.
+    """Sync registry.yaml with analyses on disk. `meta.group` is authoritative.
 
     - If registry is missing or old format: auto-migrate from meta.yaml order
-    - Adds new analyses (on disk but not in registry) to end of their group
+    - For each disk slug, ensure it appears in `registry.groups[meta.group]`.
+      If it's in a different group, remove it and append it to its declared
+      group. If its declared group doesn't exist, create the group at the
+      end of `registry.groups`.
     - Removes deleted analyses (in registry but not on disk)
     - Removes empty groups
     - Re-collects tags from all meta.yaml files
-    - Preserves agent_notes
+    - Preserves agent_notes and within-group order whenever the slug is
+      already in its declared group.
     """
     if analyses is None:
         analyses = discover_analyses(analyses_dir)
 
     disk_slugs = {a["slug"] for a in analyses}
     by_slug = {a["slug"]: a for a in analyses}
+    target_group_for = {s: by_slug[s]["meta"].get("group", "Ungrouped") for s in disk_slugs}
 
     # Collect tags from all meta.yaml files
     all_tags = set()
@@ -409,46 +414,51 @@ def _sync_registry(analyses_dir: Path, analyses: list[dict] | None = None):
         # New format exists — sync it
         agent_notes = registry.get("agent_notes", "")
 
-        # Build set of slugs currently in registry
-        registry_slugs = set()
+        # Walk existing registry, keeping only (slug, group) pairs that
+        # match the slug's declared meta.group. Anything mismatched is
+        # collected for re-insertion at the end of its declared group.
+        new_groups: list[dict] = []
+        placed: set[str] = set()
+        misplaced: list[str] = []  # slugs that were in registry but in the wrong group
+
         for group in registry.get("groups", []):
+            group_name = group["name"]
+            kept = []
             for slug in group.get("analyses", []):
-                registry_slugs.add(slug)
-
-        # Remove deleted slugs from groups
-        new_groups = []
-        for group in registry.get("groups", []):
-            filtered = [s for s in group.get("analyses", []) if s in disk_slugs]
-            if filtered:
-                new_groups.append({"name": group["name"], "analyses": filtered})
-
-        # Warn about group mismatches (registry wins for existing analyses)
-        registry_group_for = {}
-        for group in new_groups:
-            for slug in group["analyses"]:
-                registry_group_for[slug] = group["name"]
-        for slug, reg_group in registry_group_for.items():
-            if slug in by_slug:
-                meta_group = by_slug[slug]["meta"].get("group", "Ungrouped")
-                if meta_group != reg_group:
-                    print(f"  Note: {slug} meta.yaml group \"{meta_group}\" "
-                          f"differs from registry group \"{reg_group}\" (registry wins)")
-
-        # Add new slugs (on disk but not in registry)
-        new_slugs = disk_slugs - registry_slugs
-        if new_slugs:
-            # Sort new slugs by (group, slug) for deterministic insertion
-            new_sorted = sorted(new_slugs, key=lambda s: (by_slug[s]["meta"].get("group", "Ungrouped"), s))
-            groups_by_name = {g["name"]: g for g in new_groups}
-            for slug in new_sorted:
-                group_name = by_slug[slug]["meta"].get("group", "Ungrouped")
-                if group_name in groups_by_name:
-                    groups_by_name[group_name]["analyses"].append(slug)
+                if slug not in disk_slugs:
+                    continue  # deleted from disk
+                if target_group_for[slug] == group_name:
+                    kept.append(slug)
+                    placed.add(slug)
                 else:
-                    new_group = {"name": group_name, "analyses": [slug]}
-                    new_groups.append(new_group)
-                    groups_by_name[group_name] = new_group
-                print(f"  Added {slug} to group \"{group_name}\"")
+                    misplaced.append(slug)
+            new_groups.append({"name": group_name, "analyses": kept})
+
+        # Slugs on disk not yet placed: misplaced (from a different existing
+        # group) + brand-new (never in registry). Append each to its declared
+        # group's list, creating the group at the end of registry if missing.
+        unplaced = [s for s in disk_slugs if s not in placed]
+        # Determinism: when several slugs land in the same destination group,
+        # insert them in alphabetical order (matches the original migration
+        # branch and the previous behavior for new slugs).
+        unplaced.sort()
+        groups_by_name = {g["name"]: g for g in new_groups}
+        for slug in unplaced:
+            target = target_group_for[slug]
+            if target in groups_by_name:
+                groups_by_name[target]["analyses"].append(slug)
+            else:
+                new_group = {"name": target, "analyses": [slug]}
+                new_groups.append(new_group)
+                groups_by_name[target] = new_group
+            if slug in misplaced:
+                print(f"  Moved {slug} to group \"{target}\"")
+            else:
+                print(f"  Added {slug} to group \"{target}\"")
+
+        # Drop empty groups (possible after slug deletion or group rename
+        # leaving the old name stale on disk).
+        new_groups = [g for g in new_groups if g["analyses"]]
 
         updated = {
             "agent_notes": agent_notes,

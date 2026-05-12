@@ -486,3 +486,148 @@ def test_prime_picks_up_existing_marker(collection):
     # prime() does not publish; initial state is delivered via `hello`.
     assert bus.by_name("agent_active") == []
     assert tr.get_agent_active() == {"edits_start_at": "2026-05-11T14:00:00Z"}
+
+
+# ── meta.group disk-edit surgical patch ─────────────────────────────
+
+
+def test_meta_group_change_emits_card_moved(collection):
+    """Editing `meta.group` on disk emits a `card_moved` event, not a
+    `full_reload`, and updates the in-memory registry snapshot."""
+    analyses, output = collection
+    tr, bus = _prime(collection)
+
+    # Add a second group to the registry so the move target exists.
+    reg_path = analyses / "registry.yaml"
+    new_reg = yaml.safe_load(reg_path.read_text())
+    new_reg["groups"].append({"name": "g2", "analyses": []})
+    reg_path.write_text(yaml.safe_dump(new_reg))
+    tr.handle(FileChange(path=reg_path, kind="registry", slug=None, is_delete=False))
+    bus.events.clear()
+
+    meta = analyses / "slug_a" / "meta.yaml"
+    data = yaml.safe_load(meta.read_text())
+    data["group"] = "g2"
+    meta.write_text(yaml.safe_dump(data))
+
+    tr.handle(FileChange(path=meta, kind="meta", slug="slug_a", is_delete=False))
+
+    moved = bus.by_name("card_moved")
+    assert len(moved) == 1
+    assert moved[0]["data"]["slug"] == "slug_a"
+    assert moved[0]["data"]["new_group"] == "g2"
+    assert moved[0]["data"]["group_label"] == "g2"
+    assert moved[0]["data"]["before_slug"] is None
+    assert not bus.by_name("full_reload")
+
+    # Snapshot reflects the move: slug_a now lives in g2, g1 only has slug_b.
+    snapshot = {g["name"]: list(g["analyses"]) for g in tr._state.registry_groups}
+    assert snapshot["g1"] == ["slug_b"]
+    assert snapshot["g2"] == ["slug_a"]
+
+
+def test_meta_group_change_to_new_group_emits_card_moved(collection):
+    """Edit to a brand-new group name still emits `card_moved`; the client
+    side will fall back to `location.reload()` because the subtitle is missing."""
+    analyses, output = collection
+    tr, bus = _prime(collection)
+
+    meta = analyses / "slug_a" / "meta.yaml"
+    data = yaml.safe_load(meta.read_text())
+    data["group"] = "fresh_group"
+    meta.write_text(yaml.safe_dump(data))
+
+    tr.handle(FileChange(path=meta, kind="meta", slug="slug_a", is_delete=False))
+
+    moved = bus.by_name("card_moved")
+    assert len(moved) == 1
+    assert moved[0]["data"]["new_group"] == "fresh_group"
+    assert moved[0]["data"]["group_label"] == "fresh_group"
+
+
+def test_meta_group_change_does_not_double_emit_after_registry(collection):
+    """If `_handle_registry` already moved the slug in the snapshot, a
+    subsequent `_handle_meta` for the same slug doesn't emit a duplicate
+    `card_moved`."""
+    analyses, output = collection
+
+    # Pre-seed: registry has g1 [slug_a, slug_b] and g2 []. Now write a
+    # registry that moves slug_a into g2; the registry handler will emit
+    # card_moved. Then write meta.group=g2 and confirm no double emission.
+    reg_path = analyses / "registry.yaml"
+    seed_reg = {
+        "groups": [
+            {"name": "g1", "analyses": ["slug_a", "slug_b"]},
+            {"name": "g2", "analyses": []},
+        ],
+        "tags": ["t1"],
+    }
+    reg_path.write_text(yaml.safe_dump(seed_reg))
+
+    tr, bus = _prime(collection)
+
+    # diff_registry only emits card_moved when neither group's slug set
+    # changes; a slug moving from g1 → g2 means both groups' slug sets
+    # change. But the snapshot mutation in _handle_meta is what matters
+    # for the doubled-event guard. Bypass the registry handler by directly
+    # mutating the snapshot (mirrors what begin_rename does for renames).
+    tr._move_slug_in_snapshot("slug_a", "g2")
+
+    meta = analyses / "slug_a" / "meta.yaml"
+    data = yaml.safe_load(meta.read_text())
+    data["group"] = "g2"
+    meta.write_text(yaml.safe_dump(data))
+
+    tr.handle(FileChange(path=meta, kind="meta", slug="slug_a", is_delete=False))
+
+    # Snapshot already had slug_a in g2 → no event emitted.
+    assert bus.by_name("card_moved") == []
+
+
+# ── group rename suppression ────────────────────────────────────────
+
+
+def test_rename_publishes_single_group_renamed_event(collection):
+    """begin_rename → simulated watcher events → end_rename_and_publish
+    yields exactly one `group_renamed` event, no `card_moved`."""
+    analyses, output = collection
+    tr, bus = _prime(collection)
+
+    # Both slugs live in g1; we'll rename g1 → "Group One".
+    tr.begin_rename("g1", "Group One", {"slug_a", "slug_b"})
+
+    # The endpoint would now write registry + each meta; here we simulate
+    # the watcher firing for each affected file.
+    reg_path = analyses / "registry.yaml"
+    new_reg = yaml.safe_load(reg_path.read_text())
+    new_reg["groups"][0]["name"] = "Group One"
+    reg_path.write_text(yaml.safe_dump(new_reg))
+    tr.handle(FileChange(path=reg_path, kind="registry", slug=None, is_delete=False))
+
+    for slug in ("slug_a", "slug_b"):
+        meta_path = analyses / slug / "meta.yaml"
+        data = yaml.safe_load(meta_path.read_text())
+        data["group"] = "Group One"
+        meta_path.write_text(yaml.safe_dump(data))
+        tr.handle(FileChange(path=meta_path, kind="meta", slug=slug, is_delete=False))
+
+    # No events published while the rename is in flight.
+    assert bus.by_name("group_renamed") == []
+    assert bus.by_name("card_moved") == []
+    assert bus.by_name("full_reload") == []
+
+    tr.end_rename_and_publish()
+    renamed = bus.by_name("group_renamed")
+    assert len(renamed) == 1
+    assert renamed[0]["data"] == {"old_name": "g1", "new_name": "Group One"}
+    assert bus.by_name("card_moved") == []
+    assert bus.by_name("full_reload") == []
+
+
+def test_end_rename_without_begin_is_noop(collection):
+    """Calling end_rename_and_publish without a pending rename publishes
+    nothing — safe to put in a `finally` clause."""
+    _analyses, _output = collection
+    tr, bus = _prime(collection)
+    tr.end_rename_and_publish()
+    assert bus.events == []
