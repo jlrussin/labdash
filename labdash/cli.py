@@ -152,7 +152,7 @@ def cmd_init(args):
     """Init command: scaffold a new analysis set."""
     target = Path(args.path) if args.path else Path.cwd()
     from .scaffold import init_project
-    init_project(target)
+    init_project(target, language=getattr(args, "language", "python"))
 
 
 def cmd_new_wrapper(args):
@@ -216,6 +216,12 @@ def main():
     # init
     p_init = sub.add_parser("init", help="Scaffold a new analysis set in a directory")
     p_init.add_argument("path", nargs="?", help="Target directory (default: current)")
+    p_init.add_argument(
+        "--language",
+        choices=["python", "r"],
+        default="python",
+        help="Collection language (python or r). Default: python.",
+    )
     p_init.set_defaults(func=cmd_init)
 
     # new-wrapper
