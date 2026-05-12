@@ -13,7 +13,9 @@ description: >
 
 # LabDash Skill
 
-LabDash is an AI-agent-friendly analysis and visualization dashboard. Each analysis is a standalone Python script with metadata, producing a figure or table. A browser-based viewer displays results with descriptions, code, and user notes. A local server enables in-browser code editing and re-execution.
+LabDash is an AI-agent-friendly analysis and visualization dashboard. Each analysis is a standalone Python (or R) script with metadata, producing a figure or table. A browser-based viewer displays results with descriptions, code, and user notes. A local server enables in-browser code editing and re-execution.
+
+**Languages.** A collection is wholly Python OR wholly R, declared via `language:` in `collection.yaml` (default `python`). Mixed-language collections are not supported. Sections §1–§16 describe the Python contract; §17 documents the equivalent R contract — the conventions there mirror Python's exactly, just with R syntax.
 
 For scientific analysis best practices (statistical rigor, visualization philosophy, human-AI responsibilities), see the **analysis** skill. This skill covers LabDash tool mechanics only.
 
@@ -649,3 +651,201 @@ visible re-shuffle). Other open viewers see the change live.
 `labdash/_slice_order.py` (Python, exercised by `tests/test_slice_ordering.py`)
 and the `computeNewOrder` / `resolveRange` block inside
 `labdash/templates/index.html`. Change one, change the other.
+
+
+## 17. R collections
+
+A collection becomes an R collection by adding `language: r` to its
+`collection.yaml`. Every analysis in that collection is then an
+`analysis.R` file; `_lib/` files are `*.R`; in-browser editing uses
+Monaco's R mode and Pygments' `SLexer`. Mixed-language collections
+are not supported — pick one or the other.
+
+The conventions below mirror Python's exactly; if you're comfortable
+with §1–§16 the R contract is a near-mechanical translation.
+
+### 17.1 The `analysis.R` contract
+
+```r
+# Short title matching meta.yaml title.
+
+lab_source("data_loading.R")
+lab_source("style.R")
+
+# ── Aesthetic / knob variables ───────────────────────────
+TITLE  <- "Title Here"
+FIGSIZE <- c(8, 5)
+# ─────────────────────────────────────────────────────────
+
+
+run <- function(output_dir) {
+  apply_style()
+  df <- load_my_data()
+
+  # ... compute ...
+
+  # Save a figure or write output.html, plus any stats.
+  ggplot2::ggsave(file.path(output_dir, "output.png"),
+                  width = FIGSIZE[[1]], height = FIGSIZE[[2]],
+                  dpi = 150)
+  list(n = nrow(df))   # serialized as stats.json
+}
+```
+
+Key points (parallels Python's §1):
+
+* **`run <- function(output_dir)`** is the entry point. LabDash sources
+  the script, sources the bundled runtime helper that provides
+  `lab_source` / `load_parquet` / `lab_*` env getters, then calls
+  `run(output_dir)`. The returned R list is serialised to
+  `stats.json` via `jsonlite::toJSON(..., auto_unbox = TRUE)`.
+* **Knob block at the top** in a clearly marked region: titles, axis
+  limits, colors, model formulas. Same idea as Python.
+* **One script = one output.** Each script produces exactly one
+  output (`output.png` / `output.svg` / `output.html`). Two views →
+  two analysis dirs.
+* **No `if __name__ == "__main__"` equivalent.** Standalone runs
+  work as plain `Rscript analysis.R`; the runtime helper falls back
+  to walking up from CWD to find `_lib/` and `collection.yaml`.
+
+### 17.2 `lab_source` — the only sanctioned import
+
+Strict mandate, mirroring Python's static-import rule: in an
+`analysis.R` or any `_lib/*.R` file, the **only** way to pull in
+code from `_lib/` is the bundled helper:
+
+```r
+lab_source("data_loading.R")
+lab_source("plots/sde_accuracy.R")
+```
+
+The argument **must be a literal string** — variables, computed
+paths, and `file.path(...)` arguments all raise `LibImportError`
+at build/serve time with a file:line pointer. Bare `source("_lib/...")`
+calls outside of `lab_source` are similarly rejected. The strict-
+ness is what makes staleness detection work: the static parser
+reads only `lab_source("...")` invocations.
+
+### 17.3 `_lib/` layout (R)
+
+```
+_lib/
+├── data_loading.R   # load functions reading from collection.yaml/data_dir
+├── style.R          # apply_style(), color palettes
+├── stats.R          # shared modelling helpers (fit_lmer_safe, render_table_lmer, ...)
+├── preprocessing.R  # shared transforms (optional)
+└── plots/
+    └── <topic>.R    # shared plot functions: make_*(df, output_dir, ...)
+```
+
+Same idea as Python's `_lib/`; the only difference is the `.R`
+extension and no `__init__.py`.
+
+### 17.4 Runtime helpers (auto-injected before the user's `analysis.R`)
+
+The bootstrap sources `_lib/labdash.R` if present, otherwise the
+bundled copy in the labdash package's `r_runtime/`. Either way the
+following are in scope when `analysis.R` runs:
+
+* `lab_source(rel)` — strict `_lib/` import (see §17.2).
+* `upstream(slug, filename)` — path to an upstream slug's artifact.
+* `load_parquet(slug, filename = "trials.parquet")` — read upstream
+  parquet via `arrow::read_parquet`.
+* `load_json(slug, filename)` — read JSON to an R list.
+* `lab_collection_dir()`, `lab_output_root()`, `lab_output_dir()`,
+  `lab_collection_config()` — env-driven equivalents of Python's
+  `_context` getters. The `lab_` prefix avoids shadowing the
+  `output_dir` argument to `run()`.
+
+### 17.5 Tables for stats
+
+R has excellent regression-table libraries (`gtsummary`,
+`modelsummary`, `kableExtra` via `broom.mixed`). Use them with
+`output_format: table` in `meta.yaml`:
+
+```r
+run <- function(output_dir) {
+  m <- lmerTest::lmer(log_rt ~ ordinal_distance +
+                       (1 + ordinal_distance | assignment_id),
+                     data = df)
+  tbl <- gtsummary::tbl_regression(m)
+  writeLines(as.character(gtsummary::as_kable_extra(tbl, format = "html")),
+             file.path(output_dir, "output.html"))
+  list(success = TRUE, ...)  # stats.json carries headline numbers
+}
+```
+
+The existing inline-color scrubber (§7 in the Python section)
+applies to R-rendered HTML too — leave colors to labdash's theme
+and write semantic markup.
+
+### 17.6 Cross-collection data flow
+
+R does not own raw data loaders for projects that already have a
+Python pipeline. The standard pattern:
+
+1. In the Python collection, add a `pipeline` node that re-emits
+   the trial DataFrame(s) as parquet via
+   `df.to_parquet(output_dir / "trials.parquet")`. Name it
+   suggestively, e.g. `export_parquet_for_r`.
+2. In the R collection's `collection.yaml`, set `data_dir:` to the
+   path where that parquet lands (commonly something like
+   `../../_output/<py_collection>/export_parquet_for_r`).
+3. `_lib/data_loading.R` reads from `lab_collection_config()$data_dir`
+   via `arrow::read_parquet`.
+
+**LabDash does NOT propagate staleness across the python→R
+boundary.** If you change the Python pipeline, you must
+re-run the parquet export node AND then re-run the R analyses
+manually. Treat the two as a deliberate two-step.
+
+### 17.7 Required R packages
+
+Document required packages in the collection's `AGENT_CONTEXT.md`.
+A typical stats-focused R collection needs:
+
+```r
+install.packages(c(
+  "arrow", "jsonlite",
+  "lme4", "lmerTest", "broom.mixed",
+  "gtsummary",
+  "ggplot2", "dplyr", "tidyr"
+))
+```
+
+`jsonlite` is the only one labdash itself requires (for `stats.json`
+serialisation). The rest are per-collection choices.
+
+### 17.8 CLI
+
+```bash
+labdash init --language r /path/to/new_r_collection   # scaffold
+labdash build -c path/to/r_collection                 # subprocess: Rscript
+labdash serve -c path/to/r_collection                 # Monaco R mode + Run via Rscript
+```
+
+`labdash serve` for an R collection edits R files in-browser, runs
+the strict `lab_source` parser on Save, and surfaces R stderr in
+the viewer on a failed Run. No special flags needed once
+`collection.yaml: language: r` is set.
+
+### 17.9 Agent rules (R-specific deltas)
+
+All the §4 rules apply with extension swaps. Specifically:
+
+* **Read `AGENT_CONTEXT.md`** before creating or editing an R
+  analysis. It will document the parquet handoff and any
+  project-specific conventions (factor levels, reference categories,
+  random-effects fallbacks, etc.).
+* **Use `lab_source` exclusively** for `_lib/` imports. Other forms
+  fail at build time.
+* **One output per script** — same rule as Python.
+* **Run the script** after editing: `Rscript path/to/analysis.R`
+  works standalone (the runtime helper walks up from CWD); the
+  dashboard's Run button is equivalent.
+* **`notes.md` is never edited by AI agents** — same as Python.
+* **R-only collections cannot read Python pickles.** If a downstream
+  R analysis needs data from a Python pipeline, add a parquet-export
+  pipeline node in the Python collection rather than reaching for
+  `reticulate` / `rpy2` / a custom bridge. Single source of truth
+  per analysis.

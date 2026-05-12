@@ -82,8 +82,15 @@ def run(analysis: dict, output_dir: Path) -> dict:
 
     t0 = time.time()
     try:
+        # Note: we deliberately do NOT pass `--vanilla` here. That flag
+        # implies `--no-environ`, which skips `.Renviron` and therefore
+        # `R_LIBS_USER` — users with packages in their personal library
+        # would see "package not found" failures even when the packages
+        # are installed. By default Rscript already doesn't save / restore
+        # the workspace, so the default invocation is the right balance:
+        # full access to the user's installed packages + a clean run.
         proc = subprocess.run(
-            ["Rscript", "--vanilla", str(bootstrap), str(analysis_path)],
+            ["Rscript", str(bootstrap), str(analysis_path)],
             env=env,
             capture_output=True,
             text=True,
