@@ -28,4 +28,8 @@ labdash = "labdash.cli:main"
 include = ["labdash*"]
 
 [tool.setuptools.package-data]
-labdash = ["templates/**/*"]
+labdash = [
+    "templates/**/*",
+    "r_bootstrap/*.R",
+    "r_runtime/*.R",
+]
