@@ -388,10 +388,35 @@ body {
 .group-nav li.active { background: var(--accent-tint); color: var(--accent-hover); font-weight: 500; }
 .group-nav li.drag-over { border-top: 2px solid var(--accent); }
 .group-count {
-    float: right;
     font-size: 0.75rem;
     color: var(--text-faint-3);
+    margin-left: auto;
 }
+.group-nav li { display: flex; align-items: center; gap: 0.4rem; }
+.group-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-rename-btn {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-faint-3);
+    cursor: pointer;
+    padding: 0 0.25rem;
+    font-size: 0.8rem;
+    border-radius: 3px;
+}
+.group-rename-btn:hover { color: var(--accent-hover); background: var(--bg-hover-cool); }
+.group-nav li:hover .group-rename-btn { display: inline-block; }
+.group-rename-input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: inherit;
+    background: var(--bg-input, var(--bg-default));
+    border: 1px solid var(--border-default);
+    border-radius: 3px;
+    padding: 0.1rem 0.3rem;
+}
+.group-rename-input.invalid { border-color: var(--danger, #c0392b); }
 
 /* ── Group subtitles ──────────────────────────────────── */
 .group-subtitle {
@@ -1386,7 +1411,7 @@ body.splitter-dragging * { user-select: none !important; }
         <ul class="group-nav" id="groupNav">
             <li class="active" data-group="all">All groups <span class="group-count">{{ total_count }}</span></li>
             {% for group in groups %}
-            <li data-group="{{ group.name }}">{{ group.name }} <span class="group-count">{{ group.cards | length }}</span></li>
+            <li data-group="{{ group.name }}"><span class="group-nav-label">{{ group.name }}</span> <span class="group-count">{{ group.cards | length }}</span><button class="group-rename-btn" onclick="event.stopPropagation(); beginGroupRename(this)" title="Rename group" aria-label="Rename group">✎</button></li>
             {% endfor %}
         </ul>
     </div>
@@ -2236,6 +2261,149 @@ function setGroup(slug, newGroup, label) {
         updateAllOrderButtonDisabledStates();
     }
 }
+
+/* ── Sidebar group rename ──────────────────────────────── */
+function beginGroupRename(btn) {
+    const li = btn.closest('li');
+    if (!li) return;
+    const oldName = li.dataset.group;
+    if (oldName === 'all') return;  // reserved filter token
+    const labelSpan = li.querySelector('.group-nav-label');
+    if (!labelSpan) return;
+    // Stash original spans so we can restore on cancel.
+    const countSpan = li.querySelector('.group-count');
+    const renameBtn = li.querySelector('.group-rename-btn');
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'group-rename-input';
+    input.value = oldName;
+    input.setAttribute('aria-label', 'New group name');
+
+    function finish(commit) {
+        if (commit) {
+            const newName = input.value.trim();
+            const error = validateGroupRename(oldName, newName);
+            if (error) {
+                input.classList.add('invalid');
+                input.title = error;
+                return;  // keep input open for correction
+            }
+            commitGroupRename(li, oldName, newName, labelSpan, countSpan, renameBtn);
+        } else {
+            cancelGroupRename(li, labelSpan, countSpan, renameBtn);
+        }
+        input.remove();
+    }
+
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+
+    labelSpan.style.display = 'none';
+    if (countSpan) countSpan.style.display = 'none';
+    if (renameBtn) renameBtn.style.display = 'none';
+    li.insertBefore(input, countSpan || renameBtn || null);
+    input.focus();
+    input.select();
+}
+
+function validateGroupRename(oldName, newName) {
+    if (!newName) return 'Group name cannot be empty';
+    if (newName === oldName) return null;  // no-op; treat as cancel on commit
+    if (newName.toLowerCase() === 'all') return '"all" is reserved';
+    // Check duplicates against other sidebar entries.
+    const existing = new Set();
+    document.querySelectorAll('#groupNav li').forEach(li => {
+        const g = li.dataset.group;
+        if (g && g !== 'all' && g !== oldName) existing.add(g);
+    });
+    if (existing.has(newName)) return 'A group with that name already exists';
+    return null;
+}
+
+function cancelGroupRename(li, labelSpan, countSpan, renameBtn) {
+    labelSpan.style.display = '';
+    if (countSpan) countSpan.style.display = '';
+    if (renameBtn) renameBtn.style.display = '';
+}
+
+function commitGroupRename(li, oldName, newName, labelSpan, countSpan, renameBtn) {
+    cancelGroupRename(li, labelSpan, countSpan, renameBtn);
+    if (newName === oldName) return;  // no-op
+
+    // Suppress card_moved echoes from the per-meta watcher events during
+    // the rename window (server-side also suppresses, but this guards
+    // the originating tab fast).
+    window.__lastOwnOrderWriteAt = Date.now();
+
+    // Optimistically apply the rename locally so the UI feels instant.
+    if (typeof window.applyGroupRename === 'function') {
+        window.applyGroupRename(oldName, newName);
+    }
+
+    fetch('/api/registry/rename-group', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_name: oldName, new_name: newName }),
+    }).then(async r => {
+        if (!r.ok) {
+            const msg = await r.text().catch(() => '');
+            console.error('rename-group failed:', r.status, msg);
+            // Roll back the optimistic update.
+            if (typeof window.applyGroupRename === 'function') {
+                window.applyGroupRename(newName, oldName);
+            }
+        }
+    }).catch(err => {
+        console.error('rename-group network error:', err);
+        if (typeof window.applyGroupRename === 'function') {
+            window.applyGroupRename(newName, oldName);
+        }
+    });
+}
+
+/* Idempotent DOM patch for a group rename. Updates the sidebar entry,
+ * subtitle text, every card's dataset.group, every card-group-label
+ * text, and the active filter chip. Safe to invoke when the rename has
+ * already been applied (returns silently). */
+window.applyGroupRename = function(oldName, newName) {
+    if (!oldName || !newName || oldName === newName) return;
+    // Sidebar entry
+    const li = document.querySelector('#groupNav li[data-group="' + CSS.escape(oldName) + '"]');
+    if (li) {
+        li.dataset.group = newName;
+        const label = li.querySelector('.group-nav-label');
+        if (label) label.textContent = newName;
+    }
+    // Group subtitle in the main panel
+    document.querySelectorAll('.group-subtitle[data-group="' + CSS.escape(oldName) + '"]').forEach(sub => {
+        sub.dataset.group = newName;
+        const text = sub.querySelector('.group-subtitle-text');
+        if (text) text.textContent = newName;
+    });
+    // Cards
+    document.querySelectorAll('.card[data-group="' + CSS.escape(oldName) + '"]').forEach(card => {
+        card.dataset.group = newName;
+        card.querySelectorAll('.card-group-label').forEach(el => {
+            // The label may have a child icon node; the text node is the first child.
+            for (const node of el.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE && node.textContent.trim() === oldName) {
+                    node.textContent = newName;
+                    break;
+                }
+            }
+        });
+    });
+    // Active filter
+    if (typeof activeGroupFilter !== 'undefined' && activeGroupFilter === oldName) {
+        activeGroupFilter = newName;
+        const v = document.getElementById('currentView');
+        if (v && v.textContent === oldName) v.textContent = newName;
+    }
+};
 
 /* ── Tag editing ───────────────────────────────────────── */
 function removeTag(slug, tag) {

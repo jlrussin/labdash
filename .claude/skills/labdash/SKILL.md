@@ -120,7 +120,7 @@ _output/                              # Generated (gitignored)
 
 ```yaml
 title: "Human-readable title"
-group: "Group Name"              # Default group for new analyses (registry is source of truth)
+group: "Group Name"              # Authoritative group membership; registry holds group order only
 description: >                   # Short description shown on card (1-2 sentences)
   What this analysis shows and why we care.
 methodology: >                   # Detailed description (expandable in viewer)
@@ -461,7 +461,7 @@ The collection-level `change_log.md` is an **append-only log** of edits the user
 
 ## 13. Registry (`registry.yaml`)
 
-The registry is the **source of truth for group ordering** and within-group analysis ordering. It is synced (not rebuilt) on every `labdash build` and metadata edit — existing order is never changed by sync, only new analyses are added and deleted ones removed.
+The registry is the **layout manifest**: it owns the display order of groups and the within-group order of slugs. Group **membership** follows `meta.yaml.group` — when those disagree, `meta.group` wins (the slug is moved to its declared group on the next sync). The registry's `tags:` list is derived (sorted union of every analysis's `meta.tags`); editing it by hand is overwritten on sync.
 
 ```yaml
 agent_notes: |
@@ -490,8 +490,9 @@ tags:
 - Read `registry.yaml` before assigning groups and tags to new analyses.
 - Prefer existing groups and tags over creating new ones.
 - The `agent_notes` top-level string field is for high-level organizational principles; survives YAML round-trips and is surfaced verbatim in the auto preamble of `AGENT_CONTEXT.md`.
-- When creating a new analysis, set `group:` in meta.yaml — on next build, sync appends it to the end of that group in the registry.
-- You may edit `registry.yaml` directly to change ordering or group membership; registry wins for existing analyses.
+- When creating a new analysis, set `group:` in meta.yaml — on next build, sync appends it to the end of that group in the registry. If the declared group doesn't exist yet, it's created at the end.
+- Edit `registry.yaml` directly to reorder groups or to reorder slugs within a group. Membership edits made there will be reverted on the next sync by `meta.group` — change `meta.group` instead, or use the in-viewer affordances.
+- **Renaming a group** requires changing the registry group name AND every affected `meta.group`. Use the sidebar pencil affordance in the viewer (or `POST /api/registry/rename-group`) to do this atomically; editing the registry alone will re-create the old-named group on the next sync.
 
 ## 14. Staleness Detection
 
@@ -525,16 +526,25 @@ The viewer patches itself surgically for these changes:
 - `<slug>/meta.yaml` edit to `title`, `description`, `methodology`,
   `status`, `tags`, or `figure_id` → the corresponding card field
   updates in place.
+- `<slug>/meta.yaml` edit to `group` → the card moves in the DOM to
+  its declared group's section (emitted as a `card_moved` event). If
+  the declared group is brand new, a full page reload runs so the
+  sidebar entry and group subtitle can be rendered.
 - `registry.yaml` edit that just reorders slugs within a group → the
   cards reorder in the DOM.
 - `registry.yaml` edit that moves a slug between existing groups →
   the card moves in the DOM.
+- A group rename via `POST /api/registry/rename-group` (or the
+  sidebar pencil) → a single `group_renamed` event updates the
+  sidebar, all group subtitles, every card's `data-group`, every
+  card's group label, and the active group filter — no reload.
 
 Some changes still trigger a full page reload (`location.reload()`),
 because the DOM doesn't carry a structural template for them:
-- a new group is added or an existing group is removed/renamed in
-  `registry.yaml`
+- a new group is added or an existing group is removed in
+  `registry.yaml` (not via the rename endpoint)
 - a slug is added to or removed from the collection
+- a `meta.group` edit declares a group that doesn't yet exist anywhere
 - `meta.dependencies` or `meta.output_format` changes (affects
   pipeline lineage / output rendering)
 - `collection.yaml` changes
@@ -553,12 +563,13 @@ mode this surfaces as a persistent banner at the top of the viewer
 listing the file, line, and a fix hint. Stale-set updates pause until
 the error is cleared; subsequent successful saves clear the banner.
 
-**`meta.group` vs registry.** Editing `meta.group` for an *existing*
-analysis on disk still does nothing — the registry remains the source
-of truth for group membership (see §13). The server logs a warning;
-the viewer ignores the change. To move an existing card between
-groups, edit `registry.yaml` directly or use the in-app dropdown /
-drag-and-drop.
+**`meta.group` is authoritative for membership.** Editing `meta.group`
+on disk moves the analysis: the open viewer reflects the move
+surgically (no reload, unless the destination group is brand-new), and
+the next `labdash build` reconciles the registry. To rename a whole
+group atomically across the registry and every affected `meta.yaml`,
+use the sidebar pencil affordance or `POST /api/registry/rename-group`
+— editing the registry's group name alone will be reverted by sync.
 
 **No auto-run.** Live mode does **not** automatically re-execute
 stale analyses. To rerun, click Run on a card, Run All Stale, or

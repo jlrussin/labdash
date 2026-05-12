@@ -1622,6 +1622,17 @@ window.reloadData = async function() {
         } catch(err) { console.warn(err); }
     });
 
+    es.addEventListener('group_renamed', e => {
+        if (window.LiveMode.paused) return;
+        if (isOwnOrderEcho()) return;
+        try {
+            const d = JSON.parse(e.data);
+            if (typeof window.applyGroupRename === 'function') {
+                window.applyGroupRename(d.old_name, d.new_name);
+            }
+        } catch(err) { console.warn(err); }
+    });
+
     es.addEventListener('lib_code', e => {
         if (window.LiveMode.paused) return;
         try { window.applyLibCodeUpdate(JSON.parse(e.data)); }
