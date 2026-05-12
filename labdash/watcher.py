@@ -1,11 +1,13 @@
 """Filesystem watcher for `labdash serve` live-mode propagation.
 
 Watches the collection's analysis directory for edits to:
-  - `<slug>/analysis.py` wrappers
+  - `<slug>/analysis.py` (or `analysis.R`) wrappers
   - `<slug>/meta.yaml`
   - `registry.yaml`
-  - any `*.py` under `_lib/` (which may live inside or beside the
-    analyses_dir — `_resolve_lib_dir` handles the lookup)
+  - any `_lib/` source file with the collection's language extension
+    (`.py` for Python, `.R` for R). The `_lib/` directory may live
+    inside or beside the analyses_dir — `_resolve_lib_dir` handles the
+    lookup.
 
 Classifies events, debounces editor save-bursts (tempfile/rename
 patterns), and delegates to a callback. The callback receives a
@@ -13,8 +15,8 @@ patterns), and delegates to a callback. The callback receives a
 translation into SSE events is the translator's job (see
 `live_translator.py`).
 
-Hidden files, swap-file suffixes, and non-`.py` files inside `_lib/`
-are filtered out at the source.
+Hidden files, swap-file suffixes, and `_lib/` files with the wrong
+extension are filtered out at the source.
 
 The watcher runs in a watchdog `Observer` thread. Callbacks fire on the
 debounce-timer thread, which the watcher manages internally.
@@ -29,6 +31,8 @@ from typing import Callable, Literal
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+
+from .languages import Language, PythonLanguage
 
 
 FileKind = Literal["wrapper", "meta", "registry", "lib", "structural", "agent_active"]
@@ -92,6 +96,7 @@ class FileWatcher:
         *,
         lib_dir: Path | None = None,
         debounce_s: float = 0.2,
+        language: Language | None = None,
     ):
         self._root = analyses_dir.resolve()
         self._lib_dir = lib_dir.resolve() if lib_dir is not None else None
@@ -100,6 +105,7 @@ class FileWatcher:
         self._observer: Observer | None = None
         self._timers: dict[Path, threading.Timer] = {}
         self._lock = threading.Lock()
+        self._language: Language = language or PythonLanguage
 
     # ── lifecycle ──────────────────────────────────────────────────────
 
@@ -145,9 +151,12 @@ class FileWatcher:
         if _should_ignore(path):
             return None
 
+        lib_ext = self._language.lib_extension
+        wrapper_name = self._language.analysis_filename
+
         # `_lib/` first — handles both inside-root and sibling-root layouts.
         if self._lib_dir is not None and _is_subpath(abspath, self._lib_dir):
-            if path.suffix == ".py":
+            if path.suffix == lib_ext:
                 return FileChange(path=path, kind="lib", slug=None, is_delete=False)
             return None
 
@@ -164,16 +173,16 @@ class FileWatcher:
 
         # `_lib/` inside the analyses_dir (no separate observer needed)
         if parts[0] == "_lib":
-            if path.suffix == ".py":
+            if path.suffix == lib_ext:
                 return FileChange(path=path, kind="lib", slug=None, is_delete=False)
             return None
 
-        # <slug>/analysis.py | <slug>/meta.yaml
+        # <slug>/<wrapper_name> | <slug>/meta.yaml
         if len(parts) == 2:
             slug, fname = parts
             if slug.startswith("_"):
                 return None
-            if fname == "analysis.py":
+            if fname == wrapper_name:
                 return FileChange(path=path, kind="wrapper", slug=slug, is_delete=False)
             if fname == "meta.yaml":
                 return FileChange(path=path, kind="meta", slug=slug, is_delete=False)

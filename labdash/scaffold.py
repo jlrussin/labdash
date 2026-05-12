@@ -4,26 +4,25 @@ import textwrap
 from pathlib import Path
 
 
-def init_project(target: Path):
+def init_project(target: Path, *, language: str = "python"):
     """Create a single-collection LabDash project in `target`.
 
-    Layout (cwd is the collection — no separate analyses/ wrapper):
-        target/
-          collection.yaml
-          _lib/
-            data_loading.py
-            style.py
-            preprocessing.py
-            pipeline.py
-            plots/
-              README.md
-          example_pipeline/
-            analysis.py        # output_format: pipeline (writes parquet)
-            meta.yaml
-          example_analysis/
-            analysis.py        # leaf wrapper consuming the pipeline node
-            meta.yaml
+    `language` is `"python"` (default) or `"r"`. For Python collections,
+    `_lib/` and example analyses use `.py`; for R, `.R`. The
+    `collection.yaml`'s `language:` field records the choice, which the
+    runtime consults to pick the right adapter.
     """
+    language = language.lower()
+    if language not in ("python", "r"):
+        raise SystemExit(f"labdash init: unknown language: {language!r}. "
+                         "Use 'python' or 'r'.")
+    if language == "r":
+        _init_r_project(target)
+    else:
+        _init_python_project(target)
+
+
+def _init_python_project(target: Path):
     target.mkdir(parents=True, exist_ok=True)
     lib_dir = target / "_lib"
     plots_dir = lib_dir / "plots"
@@ -50,6 +49,43 @@ def init_project(target: Path):
     _write_if_missing(analysis_ex / "analysis.py", _EXAMPLE_ANALYSIS_PY)
     _write_if_missing(analysis_ex / "notes.md", _NOTES_PLACEHOLDER)
 
+    _ensure_gitignore(target)
+
+    print(f"\nLabDash collection initialized at {target}")
+    print(f"  Edit collection.yaml to set data_dir and title")
+    print(f"  Edit _lib/data_loading.py to match your data format")
+    print(f"  Run: labdash build")
+
+
+def _init_r_project(target: Path):
+    target.mkdir(parents=True, exist_ok=True)
+    lib_dir = target / "_lib"
+    plots_dir = lib_dir / "plots"
+    analysis_ex = target / "example_analysis"
+
+    for d in [lib_dir, plots_dir, analysis_ex]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    _write_if_missing(target / "collection.yaml", _COLLECTION_YAML_R)
+    _write_if_missing(lib_dir / "data_loading.R", _DATA_LOADING_R)
+    _write_if_missing(lib_dir / "style.R", _STYLE_R)
+    _write_if_missing(plots_dir / "README.md", _PLOTS_README_R)
+    _write_if_missing(plots_dir / "example.R", _PLOTS_EXAMPLE_R)
+
+    _write_if_missing(analysis_ex / "meta.yaml", _EXAMPLE_ANALYSIS_META_R)
+    _write_if_missing(analysis_ex / "analysis.R", _EXAMPLE_ANALYSIS_R)
+    _write_if_missing(analysis_ex / "notes.md", _NOTES_PLACEHOLDER)
+
+    _ensure_gitignore(target)
+
+    print(f"\nLabDash R collection initialized at {target}")
+    print(f"  Edit collection.yaml to set data_dir and title")
+    print(f"  Edit _lib/data_loading.R to load your data")
+    print(f"  Required R packages: arrow, jsonlite, ggplot2 (and your stats packages)")
+    print(f"  Run: labdash build")
+
+
+def _ensure_gitignore(target: Path) -> None:
     gitignore = target / ".gitignore"
     ignore_line = "_output/"
     if gitignore.exists():
@@ -59,11 +95,6 @@ def init_project(target: Path):
                 f.write(f"\n{ignore_line}\n")
     else:
         gitignore.write_text(f"{ignore_line}\n")
-
-    print(f"\nLabDash collection initialized at {target}")
-    print(f"  Edit collection.yaml to set data_dir and title")
-    print(f"  Edit _lib/data_loading.py to match your data format")
-    print(f"  Run: labdash build")
 
 
 def new_wrapper(
@@ -77,35 +108,56 @@ def new_wrapper(
     title: str | None = None,
     group: str = "Uncategorized",
 ):
-    """Scaffold a leaf wrapper analysis calling a shared _lib.plots module.
+    """Scaffold a leaf wrapper analysis calling a shared plots module.
 
-    Creates `<analyses_dir>/<slug>/` with analysis.py, meta.yaml, notes.md.
+    Language follows the collection (`collection.yaml: language:`).
+    Python collections get `analysis.py` importing `from {plot_module} import make`;
+    R collections get `analysis.R` sourcing the corresponding `_lib/plots/<file>.R`
+    (where `plot_module` is interpreted as a path relative to `_lib/`,
+    e.g. `plots/sde_accuracy` → `_lib/plots/sde_accuracy.R`).
     """
+    from .languages import resolve_language_for, RLanguage
+
     target_dir = analyses_dir / slug
     if target_dir.exists():
         raise SystemExit(f"Wrapper already exists: {target_dir}")
     target_dir.mkdir(parents=True)
 
+    language = resolve_language_for(analyses_dir)
     module_short = plot_module.rsplit(".", 1)[-1]
     title_final = title or slug.replace("_", " ").title()
     deps_final = deps or ([upstream] if upstream else [])
 
-    wrapper_code = _WRAPPER_TEMPLATE.format(
-        title=title_final,
-        plot_module=plot_module,
-        upstream_const=f'"{upstream}"' if upstream else "None",
-        upstream_file=upstream_file,
-    )
-    (target_dir / "analysis.py").write_text(wrapper_code)
+    if language is RLanguage:
+        # `plot_module` for R is treated as a `_lib/`-relative dotted path
+        # without an extension, e.g. `plots.example` → `plots/example.R`.
+        rel = plot_module.replace(".", "/") + ".R"
+        wrapper_code = _WRAPPER_TEMPLATE_R.format(
+            title=title_final,
+            plot_rel=rel,
+            upstream_value=f'"{upstream}"' if upstream else "NULL",
+            upstream_file=upstream_file,
+        )
+        (target_dir / "analysis.R").write_text(wrapper_code)
+        methodology_ref = f"`_lib/{rel}`"
+    else:
+        wrapper_code = _WRAPPER_TEMPLATE.format(
+            title=title_final,
+            plot_module=plot_module,
+            upstream_const=f'"{upstream}"' if upstream else "None",
+            upstream_file=upstream_file,
+        )
+        (target_dir / "analysis.py").write_text(wrapper_code)
+        methodology_ref = f"`_lib/plots/{module_short}.py`"
 
     meta_body = textwrap.dedent(
         f"""\
         title: "{title_final}"
         group: "{group}"
         description: >
-          Wrapper around _lib.plots.{module_short} for this collection.
+          Wrapper around {methodology_ref} for this collection.
         methodology: >
-          See _lib/plots/{module_short}.py for the shared plot logic.
+          See {methodology_ref} for the shared plot logic.
         tags: []
         status: draft
         output_format: png
@@ -116,7 +168,7 @@ def new_wrapper(
     (target_dir / "notes.md").write_text(_NOTES_PLACEHOLDER)
 
     print(f"Created {target_dir}")
-    print(f"  analysis.py imports from {plot_module}")
+    print(f"  {language.analysis_filename} imports from {plot_module}")
     if upstream:
         print(f"  upstream: {upstream} / {upstream_file}")
 
@@ -578,4 +630,202 @@ def run(output_dir: Path) -> dict:
 
 if __name__ == "__main__":
     run(Path(__file__).parent)
+'''
+
+
+# ── R templates ─────────────────────────────────────────────────
+
+
+_COLLECTION_YAML_R = textwrap.dedent(
+    """\
+    # LabDash R collection configuration.
+    title: "My R Analyses"
+    language: r
+
+    # Data source. R's `_lib/data_loading.R` reads this however it likes —
+    # commonly via `arrow::read_parquet(file.path(data_dir, "trials.parquet"))`.
+    data_dir: "data"
+    data_filter: "all"
+
+    # Optional overrides:
+    # output_dir: "_output/my_r"
+    # port: 8800
+    # publication_format: svg
+    # publication_dpi: 300
+    """
+)
+
+
+_DATA_LOADING_R = textwrap.dedent(
+    '''\
+    # Load and prepare data for analysis.
+    #
+    # Reads `data_dir` / `data_filter` from `collection.yaml` via the
+    # labdash R runtime helpers (`lab_collection_config`, `lab_collection_dir`).
+    # Falls back to walking up from the script's working directory when run
+    # standalone via `Rscript analysis.R`.
+
+    .data_dir <- function() {
+      cfg <- lab_collection_config()
+      d <- cfg$data_dir %||% "data"
+      coll <- lab_collection_dir()
+      if (is.character(d) && nzchar(d)) {
+        if (startsWith(d, "/")) return(d)
+        return(normalizePath(file.path(coll, d), mustWork = FALSE))
+      }
+      file.path(coll, "data")
+    }
+
+    `%||%` <- function(a, b) if (!is.null(a)) a else b
+
+    load_trials <- function(filename = "trials.parquet") {
+      load_parquet_path(file.path(.data_dir(), filename))
+    }
+
+    load_parquet_path <- function(path) {
+      if (!requireNamespace("arrow", quietly = TRUE)) {
+        stop("`arrow` package required for parquet I/O.", call. = FALSE)
+      }
+      arrow::read_parquet(path)
+    }
+    '''
+)
+
+
+_STYLE_R = textwrap.dedent(
+    '''\
+    # Shared plotting style. Apply at the start of every analysis with
+    # `apply_style()`.
+
+    LABDASH_COLORS <- list(
+      blue   = "#3b82f6",
+      orange = "#f59e0b",
+      green  = "#10b981",
+      red    = "#ef4444",
+      purple = "#8b5cf6",
+      grey   = "#6b7280"
+    )
+
+    apply_style <- function() {
+      if (!requireNamespace("ggplot2", quietly = TRUE)) return(invisible())
+      ggplot2::theme_set(ggplot2::theme_minimal(base_size = 12))
+    }
+    '''
+)
+
+
+_PLOTS_README_R = textwrap.dedent(
+    """\
+    # Shared Plot Functions (R)
+
+    Pure plotting functions go here, one per file. Each module exposes a
+    `make(df, output_dir, ...)` function:
+
+    - takes a data.frame and an output directory;
+    - accepts aesthetic parameters as named arguments;
+    - writes `output.png` (or `output.svg`) to `output_dir`;
+    - returns a stats list (serialised by labdash to `stats.json`).
+
+    A collection's leaf analyses become thin wrappers that source the
+    plot module via `lab_source("plots/<file>.R")`, set
+    collection-specific aesthetic constants at the top, and call `make()`.
+
+    See `_lib/plots/example.R` and `example_analysis/analysis.R` for a
+    minimal working example.
+    """
+)
+
+
+_PLOTS_EXAMPLE_R = textwrap.dedent(
+    '''\
+    # Example shared plot function (R).
+    #
+    # Sourced by leaf wrappers via `lab_source("plots/example.R")`.
+
+    make_example_plot <- function(df, output_dir,
+                                  title = "Example Plot",
+                                  fill_color = "#3b82f6") {
+      if (!requireNamespace("ggplot2", quietly = TRUE)) {
+        stop("`ggplot2` required for plotting.", call. = FALSE)
+      }
+      p <- ggplot2::ggplot(df, ggplot2::aes(x = .data[[names(df)[1]]])) +
+        ggplot2::geom_histogram(fill = fill_color, alpha = 0.8, bins = 30) +
+        ggplot2::labs(title = title)
+      ggplot2::ggsave(file.path(output_dir, "output.png"), plot = p,
+                     width = 8, height = 5, dpi = 150)
+      list(n = nrow(df))
+    }
+    '''
+)
+
+
+_EXAMPLE_ANALYSIS_META_R = textwrap.dedent(
+    '''\
+    title: "Example R Analysis"
+    group: "Examples"
+    description: >
+      Minimal R analysis that prints "hello" and writes a tiny table.
+    methodology: >
+      Replace with the actual statistical / visualisation procedure.
+    tags: [example]
+    status: draft
+    output_format: table
+    dependencies: []
+    '''
+)
+
+
+_EXAMPLE_ANALYSIS_R = textwrap.dedent(
+    '''\
+    # Example R analysis — minimal end-to-end wiring.
+    #
+    # The `run()` function is called by labdash with the slug's output
+    # directory. Return a list to be serialised as `stats.json`.
+
+    lab_source("style.R")
+
+    # ── Aesthetic variables ──────────────────────────────────────────
+    TITLE <- "Example R Analysis"
+    # ─────────────────────────────────────────────────────────────────
+
+
+    run <- function(output_dir) {
+      apply_style()
+
+      writeLines(
+        sprintf("<h3>%s</h3><p>Replace this with your real analysis.</p>",
+                TITLE),
+        file.path(output_dir, "output.html")
+      )
+
+      list(
+        title = TITLE,
+        n = 0L
+      )
+    }
+    '''
+)
+
+
+_WRAPPER_TEMPLATE_R = '''\
+# {title}
+#
+# Wrapper around `_lib/{plot_rel}` for this collection.
+
+lab_source("{plot_rel}")
+lab_source("style.R")
+
+# ── Aesthetic variables ──────────────────────────────
+TITLE <- "{title}"
+# ─────────────────────────────────────────────────────
+
+UPSTREAM <- {upstream_value}
+UPSTREAM_FILE <- "{upstream_file}"
+
+
+run <- function(output_dir) {{
+  apply_style()
+  df <- if (!is.null(UPSTREAM)) load_parquet(UPSTREAM, UPSTREAM_FILE) else NULL
+  make_example_plot(df, output_dir, title = TITLE)
+}}
 '''

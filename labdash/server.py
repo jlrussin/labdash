@@ -229,16 +229,19 @@ def create_app(config: dict) -> FastAPI:
     """Create the FastAPI application."""
     from .cli import _resolve_dirs
     from .builder import _resolve_lib_dir
+    from .languages import resolve_language_for
     analyses_dir, output_dir = _resolve_dirs(config)
     output_dir.mkdir(parents=True, exist_ok=True)
+    language = resolve_language_for(analyses_dir)
 
     bus = EventBus()
-    translator = LiveTranslator(analyses_dir, output_dir, bus)
+    translator = LiveTranslator(analyses_dir, output_dir, bus, language=language)
     lib_dir = _resolve_lib_dir(analyses_dir)
     watcher = FileWatcher(
         analyses_dir,
         on_change=translator.handle,
         lib_dir=lib_dir,
+        language=language,
     )
 
     @asynccontextmanager
@@ -357,7 +360,7 @@ def create_app(config: dict) -> FastAPI:
 
     @app.put("/api/code/{slug}")
     def save_code(slug: str, update: CodeUpdate):
-        """Save edited code back to analysis.py."""
+        """Save edited code back to the wrapper script (analysis.py / analysis.R)."""
         analyses = discover_analyses(analyses_dir)
         match = [a for a in analyses if a["slug"] == slug]
         if not match:
@@ -375,49 +378,57 @@ def create_app(config: dict) -> FastAPI:
 
     @app.get("/api/lib-raw")
     def list_lib_raw():
-        """Return {rel_path: source_code} for every .py file under _lib/.
+        """Return {rel_path: source_code} for every `_lib/` source file.
 
+        File extension follows the collection's language (`.py` / `.R`).
         Used by the live-mode client to populate Monaco editor buffers and
         the Copy button on shared-code panes.
         """
         from .builder import _resolve_lib_dir
+        from .languages import resolve_language_for
         lib_dir = _resolve_lib_dir(analyses_dir)
         if lib_dir is None:
             return {}
+        lang = resolve_language_for(analyses_dir)
+        pattern = f"*{lang.lib_extension}"
+        skip = {"__init__.py"}
         out: dict[str, str] = {}
-        for f in sorted(lib_dir.glob("*.py")):
-            if f.name == "__init__.py":
+        for f in sorted(lib_dir.glob(pattern)):
+            if f.name in skip:
                 continue
             out[f.name] = f.read_text()
         plots_dir = lib_dir / "plots"
         if plots_dir.is_dir():
-            for f in sorted(plots_dir.glob("*.py")):
-                if f.name == "__init__.py":
+            for f in sorted(plots_dir.glob(pattern)):
+                if f.name in skip:
                     continue
                 out[f"plots/{f.name}"] = f.read_text()
         return out
 
     @app.put("/api/lib-code")
     def save_lib_code(update: LibCodeUpdate):
-        """Save edited code back to a file under _lib/.
+        """Save edited code back to a file under `_lib/`.
 
-        Path-traversal-safe: the resolved target must stay inside _lib/.
-        On success, clears _lib from sys.modules so the next run re-imports,
-        returns the list of wrappers whose output is now stale because they
-        TRANSITIVELY import this file, and the re-highlighted HTML so the
-        client can refresh in-card shared panes without losing Pygments
-        colors.
+        Path-traversal-safe: the resolved target must stay inside `_lib/`,
+        and its extension must match the collection's language. On success,
+        clears any per-language module cache that backs in-process imports,
+        returns the list of wrappers whose output is now stale because
+        they TRANSITIVELY import this file, plus re-highlighted HTML so
+        the client can refresh in-card shared panes without losing
+        Pygments colors.
         """
-        from .builder import _resolve_lib_dir, _highlight_python
+        from .builder import _resolve_lib_dir, _highlight_source
+        from .languages import resolve_language_for
         from .lib_graph import (
             LibImportError,
-            parse_lib_imports,
             build_lib_graph,
             transitive_lib_closure,
         )
         lib_dir = _resolve_lib_dir(analyses_dir)
         if lib_dir is None:
             raise HTTPException(404, "_lib/ not found")
+
+        language = resolve_language_for(analyses_dir)
 
         # Validate path stays inside lib_dir (rejects .., absolute paths, etc.)
         lib_root = lib_dir.resolve()
@@ -428,8 +439,11 @@ def create_app(config: dict) -> FastAPI:
             raise HTTPException(400, f"Invalid path: {update.path}")
         if not target.is_file():
             raise HTTPException(404, f"File not found: {update.path}")
-        if target.suffix != ".py":
-            raise HTTPException(400, "Only .py files are editable")
+        if target.suffix != language.lib_extension:
+            raise HTTPException(
+                400,
+                f"Only {language.lib_extension} files are editable in this collection",
+            )
 
         # Log the diff before overwriting
         old_code = target.read_text()
@@ -438,7 +452,7 @@ def create_app(config: dict) -> FastAPI:
                 "status": "unchanged",
                 "path": update.path,
                 "stale_slugs": [],
-                "code_highlighted": _highlight_python(update.code),
+                "code_highlighted": _highlight_source(update.code, language),
             }
 
         diff_summary = _make_code_diff_summary(old_code, update.code)
@@ -447,9 +461,12 @@ def create_app(config: dict) -> FastAPI:
         )
         target.write_text(update.code)
 
-        # Clear _lib from sys.modules so next run re-imports fresh code.
-        for k in [k for k in sys.modules if "_lib" in k]:
-            del sys.modules[k]
+        # For Python: clear `_lib` from sys.modules so next run re-imports.
+        # R has no equivalent in-process cache (each Rscript run is a fresh
+        # process), so this is a Python-only step.
+        if language.name == "python":
+            for k in [k for k in sys.modules if "_lib" in k]:
+                del sys.modules[k]
 
         # Find wrappers that TRANSITIVELY import this file; they are now stale.
         # Build the import graph fresh (reflects the just-saved file). If the
@@ -461,9 +478,9 @@ def create_app(config: dict) -> FastAPI:
         stale_slugs: list[str] = []
         lib_graph_error: str | None = None
         try:
-            graph = build_lib_graph(lib_dir)
-            for a in discover_analyses(analyses_dir):
-                direct = parse_lib_imports(a["analysis_path"], lib_dir=lib_dir)
+            graph = build_lib_graph(lib_dir, language=language)
+            for a in discover_analyses(analyses_dir, language=language):
+                direct = language.parse_lib_imports(a["analysis_path"], lib_dir)
                 if rel in transitive_lib_closure(direct, graph):
                     stale_slugs.append(a["slug"])
         except LibImportError as e:
@@ -473,7 +490,7 @@ def create_app(config: dict) -> FastAPI:
             "status": "saved",
             "path": update.path,
             "stale_slugs": stale_slugs,
-            "code_highlighted": _highlight_python(update.code),
+            "code_highlighted": _highlight_source(update.code, language),
         }
         if lib_graph_error:
             response["lib_graph_error"] = lib_graph_error
@@ -768,7 +785,7 @@ def create_app(config: dict) -> FastAPI:
         html = index_path.read_text()
 
         # Inject live mode script before </body>
-        live_script = _get_live_mode_script()
+        live_script = _get_live_mode_script(language=language)
         html = html.replace("</body>", f"{live_script}\n</body>")
 
         return HTMLResponse(html)
@@ -776,9 +793,16 @@ def create_app(config: dict) -> FastAPI:
     return app
 
 
-def _get_live_mode_script() -> str:
-    """Return JS that enables live edit/run/save with Monaco editor."""
-    return '''
+def _get_live_mode_script(*, language=None) -> str:
+    """Return JS that enables live edit/run/save with Monaco editor.
+
+    The collection's language adapter contributes:
+      - `analysis_filename`  — used in disk-edit warning toasts (`analysis.py` / `analysis.R`)
+      - `monaco_language_id` — used to set Monaco's syntax mode
+    """
+    from .languages import PythonLanguage
+    lang = language or PythonLanguage
+    script = '''
 <!-- Monaco Editor loader from CDN -->
 <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
 <script>
@@ -964,7 +988,7 @@ window.reloadData = async function() {
             // Create read-only Monaco editor
             const ed = monaco.editor.create(monacoContainer, {
                 value: rawCode[slug],
-                language: 'python',
+                language: '__MONACO_LANGUAGE_ID__',
                 theme: 'vs-dark',
                 minimap: { enabled: false },
                 fontSize: 13,
@@ -1220,7 +1244,7 @@ window.reloadData = async function() {
         require(['vs/editor/editor.main'], function() {
             const editor = monaco.editor.create(container, {
                 value,
-                language: 'python',
+                language: '__MONACO_LANGUAGE_ID__',
                 theme: 'vs-dark',
                 minimap: { enabled: false },
                 fontSize: 13,
@@ -1540,7 +1564,7 @@ window.reloadData = async function() {
         if (editor) {
             if (L.wrapperDirty.has(slug)) {
                 window.showLiveToast(
-                    slug + '/analysis.py was edited on disk; your local edits are preserved. '
+                    slug + '/__ANALYSIS_FILENAME__ was edited on disk; your local edits are preserved. '
                     + 'Save to overwrite, or click Cancel to load the disk version.',
                     'warn'
                 );
@@ -1953,3 +1977,10 @@ window.reloadData = async function() {
     renderBanner();
 })();
 </script>'''
+    # Language-specific JS placeholders are substituted after string
+    # construction to avoid f-string escaping inside the long JS body.
+    return (
+        script
+        .replace("__ANALYSIS_FILENAME__", lang.analysis_filename)
+        .replace("__MONACO_LANGUAGE_ID__", lang.monaco_language_id)
+    )

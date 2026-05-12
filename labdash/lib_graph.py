@@ -159,21 +159,31 @@ def parse_lib_imports(py_path: Path, *, lib_dir: Path) -> set[str]:
     return rels
 
 
-def build_lib_graph(lib_dir: Path) -> dict[str, set[str]]:
+def build_lib_graph(lib_dir: Path, *, language=None) -> dict[str, set[str]]:
     """Adjacency map keyed by `_lib/`-relative POSIX path.
 
-    For each `*.py` file under `lib_dir` (recursively, including `__init__.py`),
-    the value is the set of `_lib/`-relative paths it directly imports.
-    Callers compose transitively via `transitive_lib_closure`.
+    Walks `lib_dir` for files matching the language's `_lib/` extension
+    (`.py` for Python, `.R` for R) and parses each via the language's
+    static import parser. The value at `rel` is the set of
+    `_lib/`-relative paths that file directly imports; callers compose
+    transitively via `transitive_lib_closure`.
 
-    Raises `LibImportError` on the first file with a non-static import.
+    When `language` is omitted, defaults to Python — preserves the
+    pre-language-adapter behaviour for older callers.
+
+    Raises `LibImportError` on the first file with a non-static or
+    unresolvable import.
     """
+    if language is None:
+        from .languages import PythonLanguage
+        language = PythonLanguage
     graph: dict[str, set[str]] = {}
-    for path in sorted(lib_dir.rglob("*.py")):
+    pattern = f"*{language.lib_extension}"
+    for path in sorted(lib_dir.rglob(pattern)):
         if not path.is_file():
             continue
         rel = path.relative_to(lib_dir).as_posix()
-        graph[rel] = parse_lib_imports(path, lib_dir=lib_dir)
+        graph[rel] = language.parse_lib_imports(path, lib_dir)
     return graph
 
 

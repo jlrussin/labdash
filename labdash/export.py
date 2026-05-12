@@ -104,12 +104,14 @@ def export_code(analyses_dir: Path, dest: Path, *, status: str = "publication"):
         shutil.copytree(lib_src, lib_dest)
         print(f"  Copied _lib/")
 
-    # Copy each analysis
+    # Copy each analysis — preserve the wrapper filename (`analysis.py`
+    # for Python, `analysis.R` for R).
     for a in pub:
         slug = a["slug"]
         slug_dest = dest / slug
         slug_dest.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(a["analysis_path"], slug_dest / "analysis.py")
+        wrapper_name = a["analysis_path"].name
+        shutil.copy2(a["analysis_path"], slug_dest / wrapper_name)
         meta_src = a["dir"] / "meta.yaml"
         if meta_src.exists():
             shutil.copy2(meta_src, slug_dest / "meta.yaml")

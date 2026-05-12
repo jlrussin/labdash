@@ -37,6 +37,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
+from .languages import resolve_language_for
 from .runner import _is_new_format_registry, discover_analyses, load_registry
 
 
@@ -138,8 +139,11 @@ def _collect_state(analyses_dir: Path) -> dict:
         fmt_counter[str(meta.get("output_format") or "png")] += 1
         status_counter[str(meta.get("status") or "draft")] += 1
 
+    language = resolve_language_for(analyses_dir)
+
     return {
         "collection_name": analyses_dir.name,
+        "language": language.name,
         "principle": principle,
         "groups": [(name, group_counts[name]) for name in group_order],
         "tags": sorted(tag_counter.items()),
@@ -172,6 +176,7 @@ def _render_auto(state: dict) -> str:
     lines.append("")
     lines.append(f"**Collection:** `{state['collection_name']}` "
                  f"({state['total']} analyses)")
+    lines.append(f"**Language:** {state['language']}")
     lines.append("")
 
     lines.append("## Organizing principle")

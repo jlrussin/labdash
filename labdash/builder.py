@@ -8,8 +8,6 @@ from pathlib import Path
 import markdown
 import yaml
 from jinja2 import Environment, FileSystemLoader
-from pygments import highlight
-from pygments.lexers import PythonLexer
 from pygments.formatters import HtmlFormatter
 
 from .runner import (
@@ -22,11 +20,8 @@ from .runner import (
     _resolve_run_order,
 )
 from . import agent_context
-from .lib_graph import (
-    parse_lib_imports,
-    build_lib_graph,
-    transitive_lib_closure,
-)
+from .languages import PYGMENTS_STYLE, Language, PythonLanguage, resolve_language_for
+from .lib_graph import build_lib_graph, transitive_lib_closure
 
 
 def _read_file(path: Path) -> str | None:
@@ -47,22 +42,28 @@ def _image_to_data_uri(path: Path) -> str | None:
     return f"data:{mime};base64,{data}"
 
 
-PYGMENTS_STYLE = "one-dark"
+def _highlight_source(code: str, language: Language) -> str:
+    """Syntax-highlight code via the language adapter's Pygments lexer."""
+    return language.highlight_source(code)
 
 
+# Kept for backward compatibility: older tests / external callers expect
+# a `_highlight_python` symbol. Equivalent to the Python adapter's path.
 def _highlight_python(code: str) -> str:
-    """Syntax-highlight Python code to HTML."""
-    return highlight(code, PythonLexer(), HtmlFormatter(nowrap=True, style=PYGMENTS_STYLE))
+    return PythonLanguage.highlight_source(code)
 
 
-def _parse_wrapper_imports(analysis_path: Path, lib_dir: Path) -> list[str]:
+def _parse_wrapper_imports(
+    analysis_path: Path, lib_dir: Path, *, language: Language | None = None
+) -> list[str]:
     """Return relative paths under `_lib/` that this wrapper directly imports.
 
-    Thin wrapper around `lib_graph.parse_lib_imports`; returns a deterministic
-    sorted list. Raises `LibImportError` on star imports, dynamic imports, or
-    parse errors (strict-mandate enforcement).
+    Thin wrapper around the language adapter's import parser; returns a
+    deterministic sorted list. Raises `LibImportError` on star imports,
+    dynamic imports, or parse errors (strict-mandate enforcement).
     """
-    return sorted(parse_lib_imports(analysis_path, lib_dir=lib_dir))
+    lang = language or PythonLanguage
+    return lang.parse_wrapper_imports(analysis_path, lib_dir)
 
 
 def _resolve_lib_dir(analyses_dir: Path) -> Path | None:
@@ -94,10 +95,11 @@ def build_card_data(
     slug = analysis["slug"]
     meta = analysis["meta"]
     slug_output = output_dir / slug
+    lang: Language = analysis.get("language") or PythonLanguage
 
     # Read wrapper source
     code = analysis["analysis_path"].read_text()
-    code_highlighted = _highlight_python(code)
+    code_highlighted = _highlight_source(code, lang)
 
     # Shared modules imported by this wrapper (read source, highlight, annotate).
     # Tabs show DIRECT imports only — staleness is computed against the
@@ -109,11 +111,11 @@ def build_card_data(
             src = lib_dir / rel
             if not src.is_file():
                 continue
-            display_name = rel  # e.g. "plots/sde_accuracy.py"
+            display_name = rel  # e.g. "plots/sde_accuracy.py" or "plots/foo.R"
             shared_modules.append({
                 "name": rel,
                 "display_name": display_name,
-                "code_highlighted": _highlight_python(src.read_text()),
+                "code_highlighted": _highlight_source(src.read_text(), lang),
                 "used_by_count": (used_by_count or {}).get(rel, 1),
             })
 
@@ -176,6 +178,9 @@ def build_card_data(
         "stale": stale,
         "is_pipeline": is_pipeline,
         "output_format": output_format,
+        "language": lang.name,
+        "monaco_language_id": lang.monaco_language_id,
+        "analysis_filename": lang.analysis_filename,
     }
 
 
@@ -208,7 +213,12 @@ def _lineage_segment(analysis: dict, *, is_current: bool) -> dict:
     }
 
 
-def _build_lib_data(analyses_dir: Path, used_by: dict[str, list[str]] | None = None) -> dict:
+def _build_lib_data(
+    analyses_dir: Path,
+    used_by: dict[str, list[str]] | None = None,
+    *,
+    language: Language | None = None,
+) -> dict:
     """Discover _lib/ sources and partition plots/ into used/unused sections.
 
     Returns:
@@ -220,9 +230,10 @@ def _build_lib_data(analyses_dir: Path, used_by: dict[str, list[str]] | None = N
                             "code_highlighted": ...}, ...],
         }
 
-    `used_by` maps "plots/X.py" → [slug, ...] of wrappers in this collection
+    `used_by` maps "plots/<file>" → [slug, ...] of wrappers in this collection
     that import it. Files not present in used_by land in plots_unused.
-    Top-level _lib/*.py is never filtered.
+    Top-level `_lib/*<ext>` is never filtered. The file extension and
+    highlighter follow the collection's language.
     """
     used_by = used_by or {}
     lib_files: list[dict] = []
@@ -233,25 +244,31 @@ def _build_lib_data(analyses_dir: Path, used_by: dict[str, list[str]] | None = N
     if lib_dir is None:
         return {"lib_files": [], "plots_used": [], "plots_unused": []}
 
-    for f in sorted(lib_dir.glob("*.py")):
-        if f.name == "__init__.py":
+    lang = language or resolve_language_for(analyses_dir)
+    pattern = f"*{lang.lib_extension}"
+    # Python's `__init__.py` is a structural file the user never edits; R has
+    # no analogous file to filter.
+    skip = {"__init__.py"}
+
+    for f in sorted(lib_dir.glob(pattern)):
+        if f.name in skip:
             continue
         lib_files.append({
             "name": f.name,
-            "code_highlighted": _highlight_python(f.read_text()),
+            "code_highlighted": _highlight_source(f.read_text(), lang),
         })
 
     plots_dir = lib_dir / "plots"
     if plots_dir.is_dir():
-        for f in sorted(plots_dir.glob("*.py")):
-            if f.name == "__init__.py":
+        for f in sorted(plots_dir.glob(pattern)):
+            if f.name in skip:
                 continue
             rel = f"plots/{f.name}"
             importers = used_by.get(rel, [])
             entry = {
                 "name": rel,
                 "display": f.name,
-                "code_highlighted": _highlight_python(f.read_text()),
+                "code_highlighted": _highlight_source(f.read_text(), lang),
             }
             if importers:
                 entry["used_by"] = sorted(importers)
@@ -284,12 +301,14 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
     analyses = ordered_analyses(analyses_dir)
     by_slug = {a["slug"]: a for a in analyses}
     lib_dir = _resolve_lib_dir(analyses_dir)
+    language = resolve_language_for(analyses_dir)
 
     # Build the _lib import graph once; compute each wrapper's transitive
     # closure for staleness, but track DIRECT imports separately for UI
     # surfaces (per-card "shared code" tabs and the "used by N wrappers" badge
-    # in the sidebar).
-    lib_graph = build_lib_graph(lib_dir) if lib_dir is not None else {}
+    # in the sidebar). The graph and parser come from the collection's
+    # language adapter.
+    lib_graph = build_lib_graph(lib_dir, language=language) if lib_dir is not None else {}
 
     used_by: dict[str, list[str]] = {}
     for a in analyses:
@@ -297,7 +316,7 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
             a["direct_shared_paths"] = []
             a["shared_paths"] = []
             continue
-        direct = parse_lib_imports(a["analysis_path"], lib_dir=lib_dir)
+        direct = language.parse_lib_imports(a["analysis_path"], lib_dir)
         transitive = transitive_lib_closure(direct, lib_graph)
         a["direct_shared_paths"] = sorted(direct)
         a["shared_paths"] = sorted(transitive)  # consumed by is_stale
@@ -338,7 +357,7 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
     all_statuses = sorted({card["status"] for card in cards})
 
     # Shared _lib files for sidebar (partitioned used/unused)
-    lib_data = _build_lib_data(analyses_dir, used_by=used_by)
+    lib_data = _build_lib_data(analyses_dir, used_by=used_by, language=language)
 
     # Flat list used by client JS for openLibFile() lookups.
     all_lib_entries = (
@@ -372,6 +391,8 @@ def build_dashboard(analyses_dir: Path, output_dir: Path) -> Path:
         lib_data=lib_data,
         all_lib_entries=all_lib_entries,
         collection_title=collection_title,
+        collection_language=language.name,
+        monaco_language_id=language.monaco_language_id,
     )
 
     index_path = output_dir / "index.html"
