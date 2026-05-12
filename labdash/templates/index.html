@@ -403,8 +403,10 @@ body {
     padding: 0 0.25rem;
     font-size: 0.8rem;
     border-radius: 3px;
+    margin-left: auto;
 }
 .group-rename-btn:hover { color: var(--accent-hover); background: var(--bg-hover-cool); }
+.group-nav li:hover .group-count { display: none; }
 .group-nav li:hover .group-rename-btn { display: inline-block; }
 .group-rename-input {
     flex: 1;
@@ -2232,7 +2234,6 @@ function setGroup(slug, newGroup, label) {
         });
     }
 
-    updateGroupSubtitles();
     updateSidebarGroupCounts();
 
     // Check if old group is now empty — hide its subtitle
@@ -2246,6 +2247,12 @@ function setGroup(slug, newGroup, label) {
             if (li.dataset.group === oldGroup) li.remove();
         });
     }
+
+    // Re-evaluate per-card visibility against the active filter. Without
+    // this, a card just moved out of the currently-filtered group keeps
+    // its old `style.display=""` and appears to stay put. applyFilters()
+    // also calls updateGroupSubtitles internally.
+    applyFilters();
 
     // Save to server (handles both meta.yaml and registry)
     window.__lastOwnOrderWriteAt = Date.now();
