@@ -1,31 +1,44 @@
-"""Discovers and executes analysis scripts."""
+"""Discovers and executes analysis scripts.
 
-import importlib.util
-import json
+Language-agnostic: the per-collection `language:` field in
+`collection.yaml` selects a `labdash.languages.Language` adapter that
+knows the script filename, the import-parser, and the execution
+strategy. Python keeps in-process import semantics
+(see `_python_runtime.py`); R shells out to `Rscript`
+(see `r_runner.py`).
+
+The runner cares about discovery, topological ordering, and staleness;
+the adapter handles the language-specific bits.
+"""
+
 import math
-import sys
-import time
-import traceback
 from pathlib import Path
 
 import yaml
 
-from . import _context
+from .languages import Language, resolve_language_for
 
 
-def discover_analyses(analyses_dir: Path) -> list[dict]:
-    """Find all analysis directories containing analysis.py + meta.yaml.
+def discover_analyses(
+    analyses_dir: Path, *, language: Language | None = None
+) -> list[dict]:
+    """Find all analysis directories containing the right script + meta.yaml.
 
-    Returns list of dicts with keys: slug, dir, meta, analysis_path.
-    Sorted by (group, order, slug) as a fallback ordering.
+    `language` defaults to whatever `collection.yaml`'s `language:` field
+    resolves to (Python if absent). The discovered script filename
+    follows the adapter (`analysis.py` for Python, `analysis.R` for R).
+
+    Returns list of dicts with keys: slug, dir, meta, analysis_path,
+    language. Sorted by (group, order, slug) as a fallback ordering.
     """
+    lang = language or resolve_language_for(analyses_dir)
     analyses = []
     for d in sorted(analyses_dir.iterdir()):
         if not d.is_dir() or d.name.startswith("_"):
             continue
-        analysis_py = d / "analysis.py"
+        analysis_path = d / lang.analysis_filename
         meta_yaml = d / "meta.yaml"
-        if not analysis_py.exists() or not meta_yaml.exists():
+        if not analysis_path.exists() or not meta_yaml.exists():
             continue
         with open(meta_yaml) as f:
             meta = yaml.safe_load(f)
@@ -35,7 +48,8 @@ def discover_analyses(analyses_dir: Path) -> list[dict]:
             "slug": d.name,
             "dir": d,
             "meta": meta,
-            "analysis_path": analysis_py,
+            "analysis_path": analysis_path,
+            "language": lang,
         })
     analyses.sort(key=lambda a: (a["meta"].get("group", ""), a["meta"].get("order", 999), a["slug"]))
     return analyses
@@ -166,8 +180,8 @@ def is_stale(
     """Return True if `slug` needs to be rerun.
 
     Transitive rules:
-    - self-stale if analysis.py OR any imported _lib/ file is newer than the
-      oldest of its output files (or if its output dir is empty);
+    - self-stale if the wrapper OR any imported _lib/ file is newer than
+      the oldest of its output files (or if its output dir is empty);
     - dep-stale if any upstream dep's newest output is newer than this
       slug's oldest output;
     - recursively stale if any upstream dep is itself stale.
@@ -233,7 +247,7 @@ def _shared_paths_abs(analysis: dict) -> list[Path]:
     runner paths (e.g. `labdash build --only-stale` without a preceding
     builder pass) still propagate shared-file edits correctly.
     """
-    # analyses_dir = analysis.py's grandparent
+    # analyses_dir = analysis script's grandparent (collection root).
     analyses_dir = analysis["analysis_path"].parent.parent
     lib_dir: Path | None = None
     for d in [analyses_dir, analyses_dir.parent]:
@@ -245,13 +259,10 @@ def _shared_paths_abs(analysis: dict) -> list[Path]:
 
     rels = analysis.get("shared_paths")
     if rels is None:
-        from .lib_graph import (
-            parse_lib_imports,
-            build_lib_graph,
-            transitive_lib_closure,
-        )
-        graph = build_lib_graph(lib_dir)
-        direct = parse_lib_imports(analysis["analysis_path"], lib_dir=lib_dir)
+        from .lib_graph import build_lib_graph, transitive_lib_closure
+        lang = analysis.get("language") or resolve_language_for(analyses_dir)
+        graph = build_lib_graph(lib_dir, language=lang)
+        direct = lang.parse_lib_imports(analysis["analysis_path"], lib_dir)
         rels = sorted(transitive_lib_closure(direct, graph))
         analysis["shared_paths"] = rels  # cache back
 
@@ -325,76 +336,24 @@ def stale_only(
     return [a for a in full_order if a["slug"] in stale_slugs]
 
 
-# ── Collection config loading ──────────────────────────────────────────
-
-
-def _load_collection_config(analyses_root: Path) -> dict:
-    """Load collection.yaml from the analyses directory, or return {}."""
-    cfg = analyses_root / "collection.yaml"
-    if cfg.exists():
-        with open(cfg) as f:
-            return yaml.safe_load(f) or {}
-    return {}
-
-
 # ── Execution ──────────────────────────────────────────────────────────
 
 
 def run_analysis(analysis: dict, output_dir: Path) -> dict:
-    """Execute a single analysis script. Returns result dict.
+    """Execute a single analysis. Dispatches through the language adapter.
 
-    `output_dir` here is the collection-level output root (e.g. _output/pilot1_test/);
-    the slug-level output dir is output_dir / slug.
+    `output_dir` is the collection-level output root (e.g. `_output/exp1/`);
+    the slug-level directory `output_dir / slug` is created by the adapter.
+    Returns the standard result dict: {slug, success, stats, error, duration_s}.
     """
-    slug = analysis["slug"]
-    analysis_path = analysis["analysis_path"]
-    analyses_root = analysis_path.parent.parent
-    slug_output = output_dir / slug
-    slug_output.mkdir(parents=True, exist_ok=True)
-
-    # Add analyses root and its parent to sys.path so _lib imports work.
-    # _lib/ may be in the collection dir (analyses_root) or one level up
-    # (for collection-based layouts where _lib/ is shared across collections).
-    for path in [analyses_root, analyses_root.parent]:
-        path_str = str(path)
-        if path_str not in sys.path and (path / "_lib").is_dir():
-            sys.path.insert(0, path_str)
-
-    collection_config = _load_collection_config(analyses_root)
-
-    result = {
-        "slug": slug,
-        "success": False,
-        "stats": None,
-        "error": None,
-        "duration_s": 0,
-    }
-
-    t0 = time.time()
-    try:
-        _context.set_current(
-            collection_dir=analyses_root,
-            output_root=output_dir,
-            output_dir=slug_output,
-            collection_config=collection_config,
-        )
-        spec = importlib.util.spec_from_file_location(f"analysis_{slug}", str(analysis_path))
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        stats = mod.run(slug_output)
-        result["success"] = True
-        result["stats"] = stats or {}
-        # Save stats.json
-        if stats:
-            with open(slug_output / "stats.json", "w") as f:
-                json.dump(stats, f, indent=2, default=str)
-    except Exception:
-        result["error"] = traceback.format_exc()
-    finally:
-        _context.clear()
-        result["duration_s"] = round(time.time() - t0, 2)
-
-    return result
+    lang: Language = analysis.get("language")
+    if lang is None:
+        # Should not happen if `discover_analyses` was used, but be lenient
+        # for callers that hand-build analysis dicts (older tests).
+        analyses_dir = analysis["analysis_path"].parent.parent
+        lang = resolve_language_for(analyses_dir)
+        analysis["language"] = lang
+    return lang.run_analysis(analysis, output_dir)
 
 
 def run_all(

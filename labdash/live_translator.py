@@ -36,11 +36,11 @@ from typing import Any
 import yaml
 
 from . import agent_context
-from .builder import _highlight_python, _resolve_lib_dir
+from .builder import _highlight_source, _resolve_lib_dir
+from .languages import Language, PythonLanguage, resolve_language_for
 from .lib_graph import (
     LibImportError,
     build_lib_graph,
-    parse_lib_imports,
     transitive_lib_closure,
 )
 from .live_events import EventBus
@@ -238,10 +238,13 @@ class LiveTranslator:
         analyses_dir: Path,
         output_dir: Path,
         bus: EventBus,
+        *,
+        language: Language | None = None,
     ):
         self.analyses_dir = analyses_dir
         self.output_dir = output_dir
         self.bus = bus
+        self.language: Language = language or resolve_language_for(analyses_dir)
         self._state = _State()
         # `handle` may run on multiple debounce threads if many paths
         # change simultaneously; guard the state mutations.
@@ -373,7 +376,7 @@ class LiveTranslator:
                     "data": {
                         "path": rel,
                         "raw": new_text,
-                        "highlighted": _highlight_python(new_text),
+                        "highlighted": _highlight_source(new_text, self.language),
                     },
                 })
 
@@ -398,7 +401,7 @@ class LiveTranslator:
                 "data": {
                     "slug": change.slug,
                     "raw": new_text,
-                    "highlighted": _highlight_python(new_text),
+                    "highlighted": _highlight_source(new_text, self.language),
                 },
             })
 
@@ -563,12 +566,14 @@ class LiveTranslator:
         again — subsequent successful recomputes emit `lib_error_clear`.
         """
         try:
-            analyses = discover_analyses(self.analyses_dir)
+            analyses = discover_analyses(self.analyses_dir, language=self.language)
             lib_dir = _resolve_lib_dir(self.analyses_dir)
             if lib_dir is not None:
-                graph = build_lib_graph(lib_dir)
+                graph = build_lib_graph(lib_dir, language=self.language)
                 for a in analyses:
-                    direct = parse_lib_imports(a["analysis_path"], lib_dir=lib_dir)
+                    direct = self.language.parse_lib_imports(
+                        a["analysis_path"], lib_dir
+                    )
                     a["shared_paths"] = sorted(
                         transitive_lib_closure(direct, graph)
                     )
@@ -619,7 +624,8 @@ class LiveTranslator:
         lib_dir = _resolve_lib_dir(self.analyses_dir)
         if lib_dir is None:
             return
-        for p in lib_dir.rglob("*.py"):
+        pattern = f"*{self.language.lib_extension}"
+        for p in lib_dir.rglob(pattern):
             if p.is_file():
                 text = _safe_read_text(p)
                 if text is not None:
@@ -637,10 +643,11 @@ class LiveTranslator:
         self._state.agent_active = {"edits_start_at": _parse_agent_active(text)}
 
     def _refresh_wrapper_hashes(self) -> None:
+        wrapper_name = self.language.analysis_filename
         for child in self.analyses_dir.iterdir():
             if not child.is_dir() or child.name.startswith("_"):
                 continue
-            wrapper = child / "analysis.py"
+            wrapper = child / wrapper_name
             if wrapper.is_file():
                 text = _safe_read_text(wrapper)
                 if text is not None:
