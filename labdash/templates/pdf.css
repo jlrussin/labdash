@@ -1,0 +1,467 @@
+/* LabDash PDF export stylesheet.
+   Print-only; light theme; CSS Paged Media (WeasyPrint). */
+
+@page {
+    size: Letter;
+    margin: 0.55in 0.55in 0.7in 0.55in;
+    @bottom-center {
+        content: counter(page) " / " counter(pages);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-size: 8.5pt;
+        color: #9aa0a6;
+    }
+    @bottom-left {
+        content: string(doc-title);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-size: 8.5pt;
+        color: #9aa0a6;
+    }
+}
+
+/* Cover page: wider margins, no running footer. */
+@page cover {
+    size: Letter;
+    margin: 1.1in 0.9in 0.9in 0.9in;
+    @bottom-center { content: none; }
+    @bottom-left { content: none; }
+    @bottom-right { content: none; }
+}
+
+/* Theme tokens (light only) */
+:root {
+    --ink: #1a1a2e;
+    --ink-soft: #2c2c44;
+    --muted: #5a6068;
+    --muted-2: #8a8f97;
+    --hair: #e6e7ea;
+    --hair-2: #f1f2f5;
+    --accent: #3a6df0;
+    --accent-soft: #e9efff;
+    --stale-bg: #fff1f0;
+    --stale-fg: #9b2c2c;
+    --stale-bd: #f1c6c2;
+    --pipeline-bg: #f3eefe;
+    --pipeline-fg: #5b3eb0;
+    --code-bg: #fafbfc;
+    --code-bd: #e6e7ea;
+    --code-accent: #3a6df0;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+    margin: 0;
+    padding: 0;
+    background: #fff;
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    /* Never leave 1 or 2 lines of a paragraph orphaned at top/bottom of a
+       page — WeasyPrint will push the whole paragraph instead. */
+    orphans: 3;
+    widows: 3;
+    /* No auto hyphenation anywhere — prevents word-chops like "logist-ic". */
+    hyphens: manual;
+    -webkit-hyphens: manual;
+}
+
+body {
+    string-set: doc-title content("");
+}
+
+.doc-title {
+    string-set: doc-title attr(data-title);
+    /* invisible — only used for the running footer */
+    position: absolute;
+    visibility: hidden;
+    height: 0;
+}
+
+/* ───────── Card ───────── */
+.pdf-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    padding: 0.14in 0 0.18in;
+    border-bottom: 1px solid var(--hair);
+    /* Top hairline only on the first card of each page, handled by the
+       border-bottom above + no top border on .pdf-card itself. */
+}
+
+.pdf-card:last-of-type { border-bottom: none; }
+
+.pdf-card-header {
+    margin-bottom: 0.14em;
+}
+
+.pdf-card-header h2 {
+    margin: 0;
+    font-size: 12.5pt;
+    font-weight: 600;
+    color: var(--ink);
+    letter-spacing: -0.005em;
+    line-height: 1.22;
+    /* `text-wrap: balance` evens line lengths; `hyphens: manual` keeps
+       WeasyPrint from inserting soft hyphens that chop words like
+       "diagnostics" → "dia-gnostics". */
+    text-wrap: balance;
+    hyphens: manual;
+    -webkit-hyphens: manual;
+    overflow-wrap: break-word;
+}
+
+/* Slug + status badges on a small grey line beneath the title. */
+.pdf-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.55em;
+    margin-top: 0.05em;
+}
+
+.pdf-slug {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", Consolas, monospace;
+    font-size: 8pt;
+    color: var(--muted-2);
+    white-space: nowrap;
+}
+
+.pdf-tags {
+    font-size: 8pt;
+    color: var(--muted);
+    font-variant: small-caps;
+    letter-spacing: 0.04em;
+}
+
+.pdf-tags::before { content: "tags: "; color: var(--muted-2); }
+
+/* Badges */
+.pdf-badge {
+    display: inline-block;
+    padding: 0.05em 0.5em;
+    border-radius: 999px;
+    font-size: 7.5pt;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    line-height: 1.4;
+    vertical-align: middle;
+}
+
+.pdf-badge-stale {
+    background: var(--stale-bg);
+    color: var(--stale-fg);
+    border: 1px solid var(--stale-bd);
+}
+
+.pdf-badge-pipeline {
+    background: var(--pipeline-bg);
+    color: var(--pipeline-fg);
+    border: 1px solid #e0d6f7;
+}
+
+.pdf-badge-status {
+    background: var(--hair-2);
+    color: var(--muted);
+    border: 1px solid var(--hair);
+}
+
+/* ───────── Sections inside a card ───────── */
+.pdf-description {
+    margin: 0.18em 0 0.32em;
+    font-size: 10.5pt;
+    color: var(--ink-soft);
+    line-height: 1.55;
+}
+
+.pdf-figure-wrap {
+    margin: 0.14em auto 0.18em;
+    text-align: center;
+    page-break-inside: avoid;
+    /* Belt-and-braces centering for embedded SVGs that ignore parent text-align */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.pdf-figure {
+    display: block;
+    margin: 0 auto;
+    max-width: 100%;
+    max-height: 4.6in;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    object-position: center;
+    /* Sharper raster scaling for embedded PNGs */
+    image-rendering: -webkit-optimize-contrast;
+    image-rendering: crisp-edges;
+}
+
+.pdf-table-wrap {
+    margin: 0.2em 0 0.3em;
+    font-size: 9.2pt;
+    overflow: hidden;
+}
+
+.pdf-table-wrap table {
+    border-collapse: collapse;
+    margin: 0 auto;
+    font-variant-numeric: tabular-nums;
+}
+
+.pdf-table-wrap th,
+.pdf-table-wrap td {
+    padding: 0.22em 0.7em;
+    border-bottom: 1px solid var(--hair);
+    text-align: left;
+    vertical-align: top;
+}
+
+.pdf-table-wrap thead th {
+    border-bottom: 1.5px solid var(--ink);
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.pdf-table-wrap tbody tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+}
+
+/* Section labels (Methodology, Stats, Notes, Code) */
+.pdf-section {
+    margin-top: 0.4em;
+}
+
+.pdf-section-label {
+    display: inline-block;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--muted-2);
+    margin-bottom: 0.15em;
+}
+
+.pdf-methodology p,
+.pdf-notes p {
+    margin: 0.1em 0 0.3em;
+    color: var(--ink-soft);
+    font-size: 10.3pt;
+    line-height: 1.55;
+}
+
+.pdf-methodology { font-style: italic; }
+.pdf-methodology p { font-style: italic; }
+.pdf-notes p { font-style: normal; }
+.pdf-notes ul, .pdf-notes ol { margin: 0.2em 0 0.3em 1.2em; }
+
+/* Stats key-value grid — flow-packs short scalars, gives wide values
+   their own row by virtue of natural flex-wrap behavior. */
+.pdf-stats-grid {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 1.4em;
+    row-gap: 0.18em;
+    font-size: 9pt;
+    margin: 0.18em 0;
+}
+.pdf-stats-grid .stat-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.4em;
+    max-width: 100%;
+    /* Long values wrap inside the chip rather than overflowing. */
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+.pdf-stats-grid .k {
+    color: var(--muted);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    flex-shrink: 0;
+}
+.pdf-stats-grid .v {
+    color: var(--ink);
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+}
+.pdf-stats-subhead {
+    margin-top: 0.32em !important;
+    margin-bottom: 0.05em;
+}
+
+.pdf-stats-table {
+    width: auto;
+    border-collapse: collapse;
+    font-size: 9.2pt;
+    margin: 0.2em 0;
+    font-variant-numeric: tabular-nums;
+}
+.pdf-stats-table th, .pdf-stats-table td {
+    padding: 0.15em 0.7em 0.15em 0;
+    border-bottom: 1px solid var(--hair);
+    text-align: left;
+    vertical-align: top;
+}
+.pdf-stats-table thead th {
+    border-bottom: 1.5px solid var(--ink);
+    font-weight: 600;
+}
+
+/* ───────── Code blocks ───────── */
+.pdf-code {
+    margin-top: 0.35em;
+    break-inside: auto;  /* allow long code to split across pages */
+}
+
+.pdf-code-filename {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", Consolas, monospace;
+    font-size: 8.5pt;
+    color: var(--muted-2);
+    margin-bottom: 0.1em;
+}
+
+.pdf-code-body {
+    background: var(--code-bg);
+    border: 1px solid var(--code-bd);
+    border-left: 2px solid var(--code-accent);
+    border-radius: 3px;
+    padding: 0.45em 0.7em;
+    overflow: hidden;
+}
+
+.pdf-code-body pre {
+    margin: 0;
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", Consolas, monospace;
+    font-size: 7.8pt;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    color: var(--ink);
+}
+
+/* Pygments tokens land inside .pdf-code .highlight via the wrapper. */
+.pdf-code .highlight { background: transparent !important; }
+
+/* ───────── Cover page + TOC ───────── */
+.pdf-cover {
+    page: cover;
+    break-after: page;
+    /* Hold the title block ~1/4 down the page for a more deliberate feel. */
+    padding-top: 0.45in;
+}
+
+.pdf-cover-title {
+    font-size: 30pt;
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.015em;
+    color: var(--ink);
+    margin: 0 0 0.18em;
+    text-wrap: balance;
+}
+
+.pdf-cover-meta {
+    color: var(--muted);
+    font-size: 10pt;
+    margin: 0 0 1.05in;
+    letter-spacing: 0.01em;
+}
+
+.pdf-toc-heading {
+    font-size: 8.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--muted-2);
+    border-bottom: 1px solid var(--hair);
+    padding-bottom: 0.3em;
+    margin: 0 0 0.55em;
+    font-weight: 600;
+}
+
+.pdf-toc {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    font-size: 11pt;
+    counter-reset: pdf-toc-item;
+}
+
+.pdf-toc-entry {
+    margin: 0 0 0.42em;
+}
+
+.pdf-toc-entry a {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5em;
+    text-decoration: none;
+    color: var(--ink);
+}
+
+.pdf-toc-name {
+    font-weight: 500;
+    color: var(--ink);
+}
+
+.pdf-toc-count {
+    color: var(--muted-2);
+    font-size: 9pt;
+    font-variant-numeric: tabular-nums;
+}
+.pdf-toc-count::before { content: "("; }
+.pdf-toc-count::after  { content: ")"; }
+
+.pdf-toc-leader {
+    flex: 1 1 auto;
+    border-bottom: 1px dotted #cdd0d6;
+    margin: 0 0.35em;
+    transform: translateY(-0.32em);
+    min-width: 1em;
+}
+
+.pdf-toc-entry a::after {
+    content: target-counter(attr(href), page);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 10pt;
+    min-width: 1.4em;
+    text-align: right;
+}
+
+/* PDF outline (sidebar bookmarks). Group level only — keep the outline tidy. */
+.pdf-card.is-group-first {
+    bookmark-level: 1;
+    bookmark-label: attr(data-group);
+}
+
+/* ───────── Skipped footer ───────── */
+.pdf-footer {
+    margin-top: 0.6in;
+    padding-top: 0.2in;
+    border-top: 1px dashed var(--hair);
+    font-size: 8.5pt;
+    color: var(--muted-2);
+    break-before: auto;
+}
+
+/* ───────── Defensive: scrub baked colours that hurt print ───────── */
+.pdf-table-wrap [bgcolor],
+.pdf-table-wrap [color],
+.pdf-stats-table [bgcolor],
+.pdf-stats-table [color] { background: transparent; color: inherit; }
+
+/* Hard reset for legacy `border="1"` HTML tables that some R packages
+   still emit (e.g. broom.mixed without kableExtra). */
+.pdf-table-wrap table[border] th,
+.pdf-table-wrap table[border] td { border: none; border-bottom: 1px solid var(--hair); }
+
+/* Stat-table footnotes (gtsummary, kableExtra) */
+.pdf-table-wrap .footnote,
+.pdf-table-wrap tfoot {
+    font-size: 8pt;
+    color: var(--muted);
+}

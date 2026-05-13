@@ -152,3 +152,67 @@ if __name__ == "__main__":
     (dest / "requirements.txt").write_text(reqs)
 
     print(f"\nExported {len(pub)} analyses to {dest}")
+
+
+def export_pdf(analyses_dir: Path, output_dir: Path, dest: Path, *,
+               status: str | None = None,
+               groups: list[str] | None = None,
+               tags: list[str] | None = None,
+               include: list[str] | None = None,
+               prefer_svg: bool = True,
+               include_cover: bool = True,
+               title: str | None = None) -> Path:
+    """Render filtered analyses into a single PDF file at `dest`.
+
+    Filters mirror the viewer: `status` matches `meta.status` exactly;
+    `groups` and `tags` are inclusive sets. Slugs are emitted in registry
+    order. `include` is a list of section names (figure, description,
+    methodology, stats, code, shared_code, notes, tags, status) — anything
+    not listed is omitted.
+    """
+    from .pdf_render import (
+        render_pdf,
+        resolve_slugs_from_filters,
+        SectionToggles,
+        PdfOptions,
+    )
+
+    slugs = resolve_slugs_from_filters(
+        analyses_dir, status=status, groups=groups, tags=tags
+    )
+    if not slugs:
+        print("No analyses matched the given filters.")
+        return dest
+
+    # Build SectionToggles from the include list. Anything explicitly named
+    # is on; anything not named is off — EXCEPT we default the `status`
+    # pill on, since it's purely metadata.
+    if include is None:
+        sections = SectionToggles()
+    else:
+        valid = set(SectionToggles.__dataclass_fields__.keys())
+        unknown = [s for s in include if s not in valid]
+        if unknown:
+            print(f"  Warning: unknown section(s) ignored: {', '.join(unknown)}")
+        chosen = {name: False for name in valid}
+        for name in include:
+            if name in chosen:
+                chosen[name] = True
+        chosen["status"] = True  # always show a status pill if non-active
+        sections = SectionToggles(**chosen)
+
+    print(f"  Rendering {len(slugs)} card(s) to PDF...")
+    pdf_bytes = render_pdf(
+        analyses_dir, output_dir, slugs,
+        sections=sections,
+        pdf_options=PdfOptions(
+            prefer_svg=prefer_svg,
+            title=title,
+            include_cover=include_cover,
+        ),
+    )
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(pdf_bytes)
+    print(f"  Wrote {dest}")
+    return dest

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ collection_title }}</title>
+<style>
+{{ pdf_css }}
+
+/* Pygments tokens — light, print-friendly */
+{{ pygments_css }}
+</style>
+</head>
+<body>
+<div class="doc-title" data-title="{{ collection_title }}"></div>
+
+{% if include_cover %}
+<section class="pdf-cover">
+    <h1 class="pdf-cover-title">{{ collection_title }}</h1>
+    <p class="pdf-cover-meta">
+        {{ cards|length }} {{ "analysis" if cards|length == 1 else "analyses" }}
+        &nbsp;&middot;&nbsp;
+        {{ groups|length }} {{ "group" if groups|length == 1 else "groups" }}
+        &nbsp;&middot;&nbsp;
+        Generated {{ today }}
+    </p>
+
+    {% if groups|length > 0 %}
+    <h2 class="pdf-toc-heading">Contents</h2>
+    <ol class="pdf-toc">
+        {% for g in groups %}
+        <li class="pdf-toc-entry">
+            <a href="#card-{{ g.first_slug }}">
+                <span class="pdf-toc-name">{{ g.name }}</span>
+                <span class="pdf-toc-count">{{ g.count }}</span>
+                <span class="pdf-toc-leader"></span>
+            </a>
+        </li>
+        {% endfor %}
+    </ol>
+    {% endif %}
+</section>
+{% endif %}
+
+{% for card in cards %}
+<article class="pdf-card{% if card.is_group_first %} is-group-first{% endif %}"
+         id="card-{{ card.slug }}"
+         data-slug="{{ card.slug }}"
+         data-status="{{ card.status }}"
+         data-group="{{ card.group }}">
+    <header class="pdf-card-header">
+        <h2>{{ card.title }}</h2>
+        <div class="pdf-card-meta">
+            <span class="pdf-slug">{{ card.slug }}</span>
+            {% if card.stale %}<span class="pdf-badge pdf-badge-stale">stale</span>{% endif %}
+            {% if card.is_pipeline %}<span class="pdf-badge pdf-badge-pipeline">pipeline</span>{% endif %}
+            {% if sections.status and card.status and card.status != 'active' %}
+                <span class="pdf-badge pdf-badge-status">{{ card.status }}</span>
+            {% endif %}
+        </div>
+    </header>
+
+    {% if sections.tags and card.tags %}
+        <div class="pdf-tags">{{ card.tags|join(", ") }}</div>
+    {% endif %}
+
+    {% if sections.description and card.description %}
+        <p class="pdf-description">{{ card.description }}</p>
+    {% endif %}
+
+    {% if sections.figure %}
+        {% if card.output_image %}
+            <div class="pdf-figure-wrap">
+                <img class="pdf-figure" src="{{ card.output_image }}" alt="{{ card.title }}">
+            </div>
+        {% elif card.output_table_html %}
+            <div class="pdf-table-wrap">{{ card.output_table_html|safe }}</div>
+        {% endif %}
+    {% endif %}
+
+    {% if sections.methodology and card.methodology %}
+        <section class="pdf-section pdf-methodology">
+            <span class="pdf-section-label">Methodology</span>
+            <p>{{ card.methodology }}</p>
+        </section>
+    {% endif %}
+
+    {# On `output_format: table` cards the rendered HTML table IS the stats,
+       so we skip the raw stats.json dump that would duplicate it. Pipeline
+       cards and figure cards still show stats when toggled on. #}
+    {% if sections.stats and card.stats and not (card.output_format == 'table' and card.output_table_html and sections.figure) %}
+        <section class="pdf-section pdf-stats">
+            <span class="pdf-section-label">Stats</span>
+            {{ stats_html(card.stats)|safe }}
+        </section>
+    {% endif %}
+
+    {% if sections.notes and card.notes_html %}
+        <section class="pdf-section pdf-notes">
+            <span class="pdf-section-label">Notes</span>
+            <div>{{ card.notes_html|safe }}</div>
+        </section>
+    {% endif %}
+
+    {% if sections.code %}
+        <section class="pdf-section pdf-code">
+            <span class="pdf-section-label">Code &mdash; {{ card.analysis_filename }}</span>
+            <div class="pdf-code-body"><pre class="highlight">{{ card.wrapper_code_highlighted|safe }}</pre></div>
+        </section>
+        {% if sections.shared_code %}
+            {% for mod in card.shared_modules %}
+                <section class="pdf-section pdf-code">
+                    <span class="pdf-section-label">Shared &mdash; {{ mod.display_name }}</span>
+                    <div class="pdf-code-body"><pre class="highlight">{{ mod.code_highlighted|safe }}</pre></div>
+                </section>
+            {% endfor %}
+        {% endif %}
+    {% endif %}
+</article>
+{% endfor %}
+
+{% if skipped %}
+<footer class="pdf-footer">
+    Skipped (no outputs on disk): {{ skipped|join(", ") }}
+</footer>
+{% endif %}
+
+</body>
+</html>

@@ -15,10 +15,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+pdf = [
+    "weasyprint>=63.0",
+]
 serve = [
     "fastapi>=0.109",
     "uvicorn>=0.27",
     "watchdog>=4",
+    "weasyprint>=63.0",
 ]
 
 [project.scripts]

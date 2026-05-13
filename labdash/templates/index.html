@@ -841,6 +841,177 @@ body {
 .btn-run-all:hover { background: var(--success-hover); }
 .btn-run-all:disabled { background: var(--neutral); cursor: not-allowed; }
 
+/* ── Export PDF button + dialog ─────────────────────────── */
+.btn-export-pdf {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.3rem 0.7rem;
+    background: var(--bg-surface);
+    color: var(--accent-text);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, transform 0.05s;
+}
+.btn-export-pdf:hover { background: var(--accent); color: var(--text-on-accent); }
+.btn-export-pdf:active { transform: translateY(1px); }
+.btn-export-pdf:disabled { opacity: 0.6; cursor: progress; }
+.btn-export-pdf .export-pdf-icon { flex-shrink: 0; }
+
+/* The spinner that replaces the icon while a PDF is being rendered. */
+.btn-export-pdf.is-loading .export-pdf-icon {
+    animation: lab-pdf-spin 0.9s linear infinite;
+    transform-origin: 50% 50%;
+}
+@keyframes lab-pdf-spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+}
+
+.export-dialog {
+    border: none;
+    border-radius: 10px;
+    padding: 0;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    box-shadow: 0 24px 60px -12px rgba(15, 23, 42, 0.35),
+                0 8px 24px -8px rgba(15, 23, 42, 0.25);
+    width: min(440px, calc(100vw - 2rem));
+    max-height: calc(100vh - 2rem);
+    overflow: hidden;
+}
+.export-dialog::backdrop {
+    background: rgba(15, 23, 42, 0.32);
+    backdrop-filter: blur(2px);
+}
+
+.export-dialog-header {
+    padding: 0.95rem 1.15rem 0.55rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.export-dialog-header h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-heading);
+    letter-spacing: -0.005em;
+}
+.export-dialog-header .export-dialog-sub {
+    margin-top: 0.2rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+.export-dialog-header .export-dialog-count {
+    color: var(--accent-text);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
+.export-dialog-body {
+    padding: 0.85rem 1.15rem 0.45rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    max-height: 55vh;
+    overflow-y: auto;
+}
+
+.export-section-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin: 0.1rem 0 0.05rem;
+}
+
+.export-toggle {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.32rem 0.45rem;
+    border-radius: 5px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.1s;
+}
+.export-toggle:hover { background: var(--bg-hover-cool); }
+.export-toggle input[type="checkbox"] {
+    margin: 0.15rem 0 0 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.export-toggle .export-toggle-label {
+    font-size: 0.84rem;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+.export-toggle .export-toggle-hint {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-top: 0.08rem;
+}
+.export-toggle.is-disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.export-toggle.is-disabled input { cursor: not-allowed; }
+
+.export-dialog-note {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+    padding: 0.4rem 0.55rem;
+    background: var(--bg-subtle);
+    border-radius: 5px;
+    line-height: 1.4;
+}
+
+.export-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.7rem 1.15rem 0.95rem;
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-subtle);
+}
+.export-dialog-error {
+    flex: 1 1 auto;
+    font-size: 0.76rem;
+    color: var(--badge-stale-text);
+    margin-right: auto;
+}
+.export-dialog-footer .btn-cancel {
+    padding: 0.38rem 0.85rem;
+    background: transparent;
+    border: 1px solid var(--border-input);
+    border-radius: 5px;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+.export-dialog-footer .btn-cancel:hover { background: var(--bg-hover); }
+.export-dialog-footer .btn-export {
+    padding: 0.38rem 1rem;
+    background: var(--accent);
+    color: var(--text-on-accent);
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+}
+.export-dialog-footer .btn-export:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.export-dialog-footer .btn-export:disabled {
+    background: var(--neutral, #ccc);
+    border-color: var(--neutral, #ccc);
+    cursor: progress;
+}
+
 /* Notes */
 .notes-expandable .expandable-body {
     background: var(--bg-notes);
@@ -1495,6 +1666,99 @@ body.splitter-dragging * { user-select: none !important; }
     </div>
 </div>
 
+<!-- Export PDF dialog -->
+<dialog id="exportPdfDialog" class="export-dialog" aria-labelledby="exportPdfDialogTitle">
+    <form method="dialog">
+        <div class="export-dialog-header">
+            <h3 id="exportPdfDialogTitle">Export to PDF</h3>
+            <div class="export-dialog-sub">
+                Rendering
+                <span class="export-dialog-count" id="exportPdfCount">0</span>
+                cards currently visible under your filters.
+            </div>
+        </div>
+        <div class="export-dialog-body">
+            <div class="export-section-label">Front matter</div>
+            <label class="export-toggle">
+                <input type="checkbox" id="exportCover" checked>
+                <span>
+                    <span class="export-toggle-label">Cover page + table of contents</span>
+                    <span class="export-toggle-hint">Title page listing each group with a clickable jump.</span>
+                </span>
+            </label>
+
+            <div class="export-section-label">Content</div>
+            <label class="export-toggle">
+                <input type="checkbox" id="exportFigure" checked>
+                <span>
+                    <span class="export-toggle-label">Figure / table</span>
+                    <span class="export-toggle-hint">The card's main output (image or stats table).</span>
+                </span>
+            </label>
+            <label class="export-toggle">
+                <input type="checkbox" id="exportDescription" checked>
+                <span>
+                    <span class="export-toggle-label">Description</span>
+                    <span class="export-toggle-hint">Short summary from <code>meta.yaml</code>.</span>
+                </span>
+            </label>
+            <label class="export-toggle">
+                <input type="checkbox" id="exportMethodology" checked>
+                <span>
+                    <span class="export-toggle-label">Methodology</span>
+                    <span class="export-toggle-hint">Longer "how it was computed" text.</span>
+                </span>
+            </label>
+            <label class="export-toggle">
+                <input type="checkbox" id="exportStats" checked>
+                <span>
+                    <span class="export-toggle-label">Stats</span>
+                    <span class="export-toggle-hint">Values from <code>stats.json</code>.</span>
+                </span>
+            </label>
+            <label class="export-toggle">
+                <input type="checkbox" id="exportNotes">
+                <span>
+                    <span class="export-toggle-label">Notes</span>
+                    <span class="export-toggle-hint">Your hand-written <code>notes.md</code>.</span>
+                </span>
+            </label>
+            <label class="export-toggle">
+                <input type="checkbox" id="exportTags">
+                <span>
+                    <span class="export-toggle-label">Tags</span>
+                    <span class="export-toggle-hint">Tag chips next to each title.</span>
+                </span>
+            </label>
+
+            <div class="export-section-label" style="margin-top:0.4rem;">Code</div>
+            <label class="export-toggle">
+                <input type="checkbox" id="exportCode">
+                <span>
+                    <span class="export-toggle-label">Wrapper code</span>
+                    <span class="export-toggle-hint">The per-card <code>analysis.py</code> / <code>.R</code>.</span>
+                </span>
+            </label>
+            <label class="export-toggle is-disabled" id="exportSharedCodeWrap">
+                <input type="checkbox" id="exportSharedCode" disabled>
+                <span>
+                    <span class="export-toggle-label">Shared code</span>
+                    <span class="export-toggle-hint">Plot &amp; lib modules the wrapper imports (only when wrapper code is on).</span>
+                </span>
+            </label>
+
+            <div class="export-dialog-note">
+                Stale cards render whatever outputs they have on disk and are marked with a small "stale" tag. Cards with no outputs are listed at the end of the PDF.
+            </div>
+        </div>
+        <div class="export-dialog-footer">
+            <div class="export-dialog-error" id="exportPdfError"></div>
+            <button type="button" class="btn-cancel" onclick="closeExportPdfDialog()">Cancel</button>
+            <button type="button" class="btn-export" id="exportPdfSubmit" onclick="submitExportPdf()">Export</button>
+        </div>
+    </form>
+</dialog>
+
 <!-- Main Content -->
 <main class="main">
     <h1 class="collection-title" id="collectionTitle" onclick="editCollectionTitle()">{{ collection_title }}</h1>
@@ -1512,6 +1776,13 @@ body.splitter-dragging * { user-select: none !important; }
             </button>
             <button class="filter-btn" onclick="collapseAll()">Collapse All</button>
             <button class="filter-btn" onclick="expandAll()">Expand All</button>
+            <button class="btn-export-pdf" id="exportPdfBtn" onclick="openExportPdfDialog()" title="Export currently-visible cards to PDF">
+                <svg class="export-pdf-icon" width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+                    <path fill="currentColor" d="M8 1.5a.75.75 0 0 1 .75.75v7.69l1.97-1.97a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0l-3.25-3.25a.75.75 0 1 1 1.06-1.06l1.97 1.97V2.25A.75.75 0 0 1 8 1.5Z"/>
+                    <path fill="currentColor" d="M2.5 13a.75.75 0 0 1 .75.75V14a.5.5 0 0 0 .5.5h8.5a.5.5 0 0 0 .5-.5v-.25a.75.75 0 0 1 1.5 0V14a2 2 0 0 1-2 2h-8.5a2 2 0 0 1-2-2v-.25A.75.75 0 0 1 2.5 13Z"/>
+                </svg>
+                <span>Export PDF</span>
+            </button>
             <button class="btn-run-all" id="runAllStaleBtn" onclick="runAllStale()" style="display:none;">Run All Stale</button>
             <button class="btn-run-all" id="runAllBtn" onclick="runAll()" style="display:none;">Run All</button>
         </div>
@@ -2106,6 +2377,175 @@ function collapseAll() {
 function expandAll() {
     getVisibleCards().forEach(c => c.classList.remove('collapsed'));
 }
+
+/* ── Export to PDF ─────────────────────────────────────── */
+const EXPORT_PDF_LS_KEY = 'labdash.exportPdf.sections';
+/* Per-card content toggles — these become the `sections` payload. */
+const EXPORT_PDF_TOGGLE_IDS = [
+    'exportFigure', 'exportDescription', 'exportMethodology',
+    'exportStats', 'exportNotes', 'exportTags',
+    'exportCode', 'exportSharedCode',
+];
+const EXPORT_PDF_SECTION_KEYS = {
+    exportFigure: 'figure',
+    exportDescription: 'description',
+    exportMethodology: 'methodology',
+    exportStats: 'stats',
+    exportNotes: 'notes',
+    exportTags: 'tags',
+    exportCode: 'code',
+    exportSharedCode: 'shared_code',
+};
+/* Document-level toggles that ride as top-level POST fields, not inside
+   `sections`. Persisted to localStorage under the same key. */
+const EXPORT_PDF_DOC_TOGGLE_IDS = ['exportCover'];
+const EXPORT_PDF_DOC_KEYS = {
+    exportCover: 'include_cover',
+};
+let _exportPdfSlugs = [];
+
+function _allExportPdfToggleIds() {
+    return EXPORT_PDF_TOGGLE_IDS.concat(EXPORT_PDF_DOC_TOGGLE_IDS);
+}
+
+function _loadExportPdfPrefs() {
+    try {
+        const raw = localStorage.getItem(EXPORT_PDF_LS_KEY);
+        if (!raw) return;
+        const saved = JSON.parse(raw);
+        _allExportPdfToggleIds().forEach(id => {
+            const cb = document.getElementById(id);
+            if (cb && typeof saved[id] === 'boolean') cb.checked = saved[id];
+        });
+    } catch (_) { /* corrupt localStorage — ignore */ }
+}
+
+function _saveExportPdfPrefs() {
+    const out = {};
+    _allExportPdfToggleIds().forEach(id => {
+        const cb = document.getElementById(id);
+        if (cb) out[id] = cb.checked;
+    });
+    try { localStorage.setItem(EXPORT_PDF_LS_KEY, JSON.stringify(out)); } catch (_) {}
+}
+
+function _syncSharedCodeEnabled() {
+    const codeCb = document.getElementById('exportCode');
+    const sharedWrap = document.getElementById('exportSharedCodeWrap');
+    const sharedCb = document.getElementById('exportSharedCode');
+    if (!codeCb || !sharedCb || !sharedWrap) return;
+    const enabled = codeCb.checked;
+    sharedCb.disabled = !enabled;
+    sharedWrap.classList.toggle('is-disabled', !enabled);
+    if (!enabled) sharedCb.checked = false;
+}
+
+function openExportPdfDialog() {
+    const dlg = document.getElementById('exportPdfDialog');
+    if (!dlg) return;
+    // Snapshot visible slugs RIGHT NOW so subsequent filter changes don't move them.
+    _exportPdfSlugs = getVisibleCards().map(c => c.dataset.slug).filter(Boolean);
+    document.getElementById('exportPdfCount').textContent = _exportPdfSlugs.length;
+    document.getElementById('exportPdfError').textContent = '';
+    _loadExportPdfPrefs();
+    _syncSharedCodeEnabled();
+    // Reset the submit button in case a previous attempt was interrupted.
+    const submit = document.getElementById('exportPdfSubmit');
+    submit.disabled = false;
+    submit.textContent = 'Export';
+    document.getElementById('exportPdfBtn').classList.remove('is-loading');
+    if (typeof dlg.showModal === 'function') {
+        dlg.showModal();
+    } else {
+        // Fallback for browsers without <dialog>.
+        dlg.setAttribute('open', '');
+    }
+}
+
+function closeExportPdfDialog() {
+    const dlg = document.getElementById('exportPdfDialog');
+    if (!dlg) return;
+    if (typeof dlg.close === 'function') dlg.close();
+    else dlg.removeAttribute('open');
+}
+
+async function submitExportPdf() {
+    const submit = document.getElementById('exportPdfSubmit');
+    const btn = document.getElementById('exportPdfBtn');
+    const err = document.getElementById('exportPdfError');
+    err.textContent = '';
+
+    if (_exportPdfSlugs.length === 0) {
+        err.textContent = 'No cards visible — adjust your filters and try again.';
+        return;
+    }
+
+    const sections = {};
+    EXPORT_PDF_TOGGLE_IDS.forEach(id => {
+        const cb = document.getElementById(id);
+        if (cb && !cb.disabled) sections[EXPORT_PDF_SECTION_KEYS[id]] = cb.checked;
+    });
+    const docToggles = {};
+    EXPORT_PDF_DOC_TOGGLE_IDS.forEach(id => {
+        const cb = document.getElementById(id);
+        if (cb && !cb.disabled) docToggles[EXPORT_PDF_DOC_KEYS[id]] = cb.checked;
+    });
+    _saveExportPdfPrefs();
+
+    submit.disabled = true;
+    submit.textContent = 'Rendering…';
+    btn.classList.add('is-loading');
+    btn.disabled = true;
+
+    try {
+        const resp = await fetch('/api/export/pdf', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                slugs: _exportPdfSlugs,
+                sections,
+                prefer_svg: true,
+                ...docToggles,
+            }),
+        });
+        if (!resp.ok) {
+            let msg = `Export failed (${resp.status})`;
+            try {
+                const data = await resp.json();
+                if (data && data.detail) msg = data.detail;
+            } catch (_) { /* not JSON */ }
+            err.textContent = msg;
+            return;
+        }
+        const blob = await resp.blob();
+        // Resolve filename from Content-Disposition if present.
+        let filename = 'labdash.pdf';
+        const cd = resp.headers.get('content-disposition');
+        if (cd) {
+            const m = cd.match(/filename="?([^";]+)"?/i);
+            if (m) filename = m[1];
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+        closeExportPdfDialog();
+    } catch (e) {
+        err.textContent = `Network error: ${e.message || e}`;
+    } finally {
+        submit.disabled = false;
+        submit.textContent = 'Export';
+        btn.classList.remove('is-loading');
+        btn.disabled = false;
+    }
+}
+
+document.addEventListener('change', e => {
+    if (e.target && e.target.id === 'exportCode') _syncSharedCodeEnabled();
+});
 
 /* ── Group editing ─────────────────────────────────────── */
 let activeDropdown = null;

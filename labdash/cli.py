@@ -132,7 +132,7 @@ def cmd_serve(args):
 
 def cmd_export(args):
     """Export command: gather publication-ready outputs."""
-    from .export import export_figures, export_code
+    from .export import export_figures, export_code, export_pdf
 
     config = _load_config()
     _apply_collection_override(config, getattr(args, "collection", None))
@@ -146,6 +146,25 @@ def cmd_export(args):
     elif args.subcommand == "code":
         dest = Path(args.output) if args.output else config["_root"] / "analysis_code"
         export_code(analyses_dir, dest, status=args.status)
+    elif args.subcommand == "pdf":
+        if args.output:
+            dest = Path(args.output)
+        else:
+            from datetime import date
+            dest = config["_root"] / f"{analyses_dir.name}_{date.today().isoformat()}.pdf"
+        groups = [g.strip() for g in args.groups.split(",")] if args.groups else None
+        tags = [t.strip() for t in args.tags.split(",")] if args.tags else None
+        include = [s.strip() for s in args.include.split(",")] if args.include else None
+        export_pdf(
+            analyses_dir, output_dir, dest,
+            status=args.status,
+            groups=groups,
+            tags=tags,
+            include=include,
+            prefer_svg=not args.no_svg,
+            include_cover=not args.no_cover,
+            title=args.title,
+        )
 
 
 def cmd_init(args):
@@ -210,6 +229,28 @@ def main():
     p_code = export_sub.add_parser("code", help="Export self-contained code directory")
     p_code.add_argument("--status", default="publication", help="Only export analyses with this status")
     p_code.add_argument("--output", help="Output directory")
+
+    p_pdf = export_sub.add_parser(
+        "pdf", help="Render filtered analyses into a single PDF document",
+    )
+    p_pdf.add_argument("--status", default=None,
+                       help="Filter by status (active/draft/publication). Default: all statuses.")
+    p_pdf.add_argument("--groups", default=None,
+                       help="Comma-separated group names to include")
+    p_pdf.add_argument("--tags", default=None,
+                       help="Comma-separated tags; cards matching ANY tag are included")
+    p_pdf.add_argument("--include", default="figure,description,methodology,stats",
+                       help=("Comma-separated sections to include per card. "
+                             "Choices: figure, description, methodology, stats, "
+                             "notes, code, shared_code, tags. "
+                             "Default: figure,description,methodology,stats."))
+    p_pdf.add_argument("--no-svg", action="store_true",
+                       help="Use PNG figures even when an SVG sits beside them")
+    p_pdf.add_argument("--no-cover", action="store_true",
+                       help="Skip the cover page + table of contents")
+    p_pdf.add_argument("--title", default=None,
+                       help="Override the title shown in the page footer")
+    p_pdf.add_argument("--output", help="Output PDF path (default: <collection>_<date>.pdf)")
 
     p_export.set_defaults(func=cmd_export)
 

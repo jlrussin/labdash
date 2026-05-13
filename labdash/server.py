@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 try:
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Response
     from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
@@ -86,6 +86,22 @@ class AgentNotesUpdate(BaseModel):
 class RenameGroupUpdate(BaseModel):
     old_name: str
     new_name: str
+
+
+class PdfExportRequest(BaseModel):
+    """Payload for POST /api/export/pdf.
+
+    `slugs` is the snapshot of currently-visible card slugs at the moment
+    the user clicked Export, in the order the viewer wants to render them
+    (the server re-orders into registry order regardless). `sections` is
+    a flat dict of bool toggles matching `SectionToggles` field names.
+    """
+    slugs: list[str]
+    sections: dict | None = None
+    prefer_svg: bool = True
+    include_cover: bool = True
+    title: str | None = None
+    filename: str | None = None
 
 
 
@@ -745,6 +761,48 @@ def create_app(config: dict) -> FastAPI:
             except OSError as e:
                 raise HTTPException(500, f"Failed to remove marker: {e}")
         return {"status": "cleared"}
+
+    # ── PDF export ─────────────────────────────────────────
+
+    @app.post("/api/export/pdf")
+    def export_pdf_endpoint(req: PdfExportRequest):
+        """Render the requested slugs into a PDF and return it as a download.
+
+        The frontend sends the snapshot of currently-visible slugs (from
+        `getVisibleCards()`) plus the section toggles the user picked in
+        the dialog. We re-order into registry order on the server.
+        """
+        from .pdf_render import render_pdf, SectionToggles, PdfOptions
+
+        try:
+            pdf_bytes = render_pdf(
+                analyses_dir, output_dir, req.slugs,
+                sections=SectionToggles.from_dict(req.sections),
+                pdf_options=PdfOptions(
+                    prefer_svg=req.prefer_svg,
+                    title=req.title,
+                    include_cover=req.include_cover,
+                ),
+            )
+        except RuntimeError as e:
+            # WeasyPrint not installed — surface a helpful 501.
+            raise HTTPException(501, str(e))
+
+        from datetime import date
+        default_name = f"{analyses_dir.name}_{date.today().isoformat()}.pdf"
+        filename = req.filename or default_name
+        # Strip any path components and ensure .pdf extension.
+        filename = Path(filename).name
+        if not filename.lower().endswith(".pdf"):
+            filename += ".pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     # ── Live-mode event stream ─────────────────────────────
 
