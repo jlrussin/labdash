@@ -849,3 +849,60 @@ All the §4 rules apply with extension swaps. Specifically:
   pipeline node in the Python collection rather than reaching for
   `reticulate` / `rpy2` / a custom bridge. Single source of truth
   per analysis.
+
+
+## 18. Writing card descriptions
+
+`meta.yaml`'s `description` field is the first thing a reader sees on
+a card. Default to short and concrete: surface what the reader needs
+to interpret the plot or table, skip what they can already see on it.
+
+**Default to short.** Long descriptions get skipped. Aim for what's
+non-obvious — which trials/subjects are included, what each color or
+facet means, what units the axes are in, what the predictor and
+moderator are in plain words. Skip restating axis labels, plot type,
+reference lines, or anything else rendered directly on the figure.
+
+**`methodology` is where technical depth lives.** Model spec,
+random-effects ladder, data filters, audit-grade detail — all in
+`methodology`. Keep `description` as the headline.
+
+### 18.1 Sign-interpretation prose on stat-card tables
+
+This sub-rule applies **only** to stat-test cards that render an
+HTML/Markdown coefficient table (e.g. a `lmer` / `glmer` / `lm` /
+`glm` fit producing a table of Estimate, SE, p-value rows). It does
+not apply to plotting cards (`viz_*`, `re_*`, `diag_*`) or to
+pipeline nodes.
+
+If a stat-card description contains prose of the form
+"a negative `coef_name` coefficient means …" or
+"a positive interaction means the slope is more X in level A than
+in level B", that sentence must match the **actual sign** of the
+coefficient as fit. Pick the verb and the direction of comparison so
+the sentence reads true given the data. Do **not** default-pick a
+sign and write boilerplate that happens to flip when the user looks
+at the table.
+
+**How to verify.** Read the fitted model's `stats.json` at
+`_output/<collection>/<stat_slug>/stats.json` — it carries every
+fixed-effect coefficient with its estimate, SE, and p-value. Take
+the sign of the `estimate` field for the coefficient you're
+describing. For an interaction term `A:B`, the sign tells you
+whether level B's slope is more (positive interaction) or less
+(negative interaction) than level A's slope; phrase the comparison
+in the direction more intuitive given which slope is the meaningful
+one in the data.
+
+**For brand-new stat cards, run first.** When scaffolding a new stat
+card, `stats.json` does not exist until the card has been run. The
+required order of operations:
+
+1. Write the analysis script and a placeholder `description`.
+2. Run the card (`labdash build -c <collection> <slug>` or the Run
+   button in the viewer).
+3. Read the resulting `stats.json` to learn the coefficient signs.
+4. Edit `description` to match.
+
+Skipping the run-then-revise step is the most common way to ship a
+description that contradicts the very table it sits above.
