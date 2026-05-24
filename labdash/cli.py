@@ -127,7 +127,12 @@ def cmd_serve(args):
     from .server import create_app
     app = create_app(config)
     print(f"LabDash server at http://localhost:{port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    # `timeout_graceful_shutdown` makes Ctrl+C exit in ≤2s even when a
+    # browser holds the SSE `/events` stream open. Without it, uvicorn
+    # waits forever for the long-lived SSE request to complete before
+    # running the lifespan shutdown that would have closed it.
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning",
+                timeout_graceful_shutdown=2)
 
 
 def cmd_export(args):
