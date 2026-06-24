@@ -342,7 +342,7 @@ def stale_only(
 def run_analysis(analysis: dict, output_dir: Path) -> dict:
     """Execute a single analysis. Dispatches through the language adapter.
 
-    `output_dir` is the collection-level output root (e.g. `_output/exp1/`);
+    `output_dir` is the collection-level output root (e.g. `<collection>/_output/`);
     the slug-level directory `output_dir / slug` is created by the adapter.
     Returns the standard result dict: {slug, success, stats, error, duration_s}.
     """

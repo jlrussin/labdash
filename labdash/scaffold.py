@@ -194,11 +194,11 @@ _COLLECTION_YAML = textwrap.dedent(
     title: "My Analyses"
 
     # Data source (consumed by _lib/data_loading.py via labdash runtime context).
-    data_dir: "data"       # path (relative to project root) to your data directory
+    data_dir: "data"       # path (relative to the collection directory) to your data
     data_filter: "all"     # all | prod | test (interpretation is up to data_loading.py)
 
     # Optional overrides:
-    # output_dir: "_output/my_analyses"
+    # output_dir: "_output"   # relative to this collection (default: _output)
     # port: 8800
     # publication_format: svg
     # publication_dpi: 300
@@ -648,7 +648,7 @@ _COLLECTION_YAML_R = textwrap.dedent(
     data_filter: "all"
 
     # Optional overrides:
-    # output_dir: "_output/my_r"
+    # output_dir: "_output"   # relative to this collection (default: _output)
     # port: 8800
     # publication_format: svg
     # publication_dpi: 300

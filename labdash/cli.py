@@ -61,12 +61,17 @@ def _apply_collection_override(config: dict, collection: str | None):
 def _resolve_dirs(config: dict) -> tuple[Path, Path]:
     """Return (analyses_dir, output_dir) from config.
 
+    Output is COLLECTION-LOCAL and CWD-independent: it lives inside the
+    collection's own analyses_dir, never anchored to where the command was
+    invoked. Resolving analyses_dir to an absolute path means the same
+    collection reached from any working directory (repo root with
+    `-c analysis/foo`, or `cd analysis/foo` with a cwd collection.yaml) yields
+    the SAME output_dir.
+
     Rules for output_dir:
-      1. If `output_dir` is explicitly set in collection.yaml, use it.
-      2. Else if the analyses_dir contains a collection.yaml, default to
-         _output/<analyses_dir.name>/ (per-collection subdir, prevents
-         cross-collection output collisions).
-      3. Else use _output/ (flat, for single-collection one-off projects).
+      1. If `output_dir` is explicitly set in collection.yaml, resolve it
+         relative to the collection's analyses_dir.
+      2. Otherwise default to `<analyses_dir>/_output/`.
     """
     root = config["_root"]
     if "analyses_dir" not in config:
@@ -74,14 +79,12 @@ def _resolve_dirs(config: dict) -> tuple[Path, Path]:
             "labdash: no collection found. Either cd into a directory with "
             "collection.yaml or pass -c <collection_dir>."
         )
-    analyses_dir = root / config["analyses_dir"]
+    analyses_dir = (root / config["analyses_dir"]).resolve()
 
     if "output_dir" in config:
-        output_dir = root / config["output_dir"]
-    elif (analyses_dir / "collection.yaml").exists():
-        output_dir = root / "_output" / analyses_dir.name
+        output_dir = (analyses_dir / config["output_dir"]).resolve()
     else:
-        output_dir = root / "_output"
+        output_dir = analyses_dir / "_output"
     return analyses_dir, output_dir
 
 
@@ -94,6 +97,7 @@ def cmd_build(args):
     _apply_collection_override(config, getattr(args, "collection", None))
     analyses_dir, output_dir = _resolve_dirs(config)
     output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output: {output_dir}")
 
     slugs = args.slugs if args.slugs else None
     only_stale = getattr(args, "only_stale", False)
@@ -121,7 +125,8 @@ def cmd_serve(args):
     _apply_collection_override(config, getattr(args, "collection", None))
     # Resolve dirs to surface missing-collection errors early (and to ensure
     # the server has analyses/output paths before it starts the ASGI app).
-    _resolve_dirs(config)
+    _analyses_dir, _output_dir = _resolve_dirs(config)
+    print(f"Output: {_output_dir}")
     port = args.port or config.get("port", config.get("server_port", 8800))
 
     from .server import create_app

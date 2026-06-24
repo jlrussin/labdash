@@ -21,10 +21,10 @@ from typing import Optional
 CURRENT_COLLECTION_DIR: Optional[Path] = None
 
 # Output root for the current collection — one level above the current
-# slug's output dir (e.g., _output/pilot1_test/).
+# slug's output dir (e.g., <collection>/_output/).
 CURRENT_OUTPUT_ROOT: Optional[Path] = None
 
-# Output dir for the currently-running slug (e.g., _output/pilot1_test/sde_accuracy/).
+# Output dir for the currently-running slug (e.g., <collection>/_output/sde_accuracy/).
 CURRENT_OUTPUT_DIR: Optional[Path] = None
 
 # Parsed collection.yaml for the current collection (data_dir, data_filter, etc.).

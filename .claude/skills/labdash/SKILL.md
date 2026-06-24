@@ -96,27 +96,26 @@ analysis/
 │   ├── style.py                      # Colors, fonts, apply_style()
 │   ├── pipeline.py                   # upstream()/load_pickle()/load_json() artifact helper
 │   └── plots/                        # Shared plot functions: make(df, output_dir, **kwargs)
-├── my_collection/                    # Self-contained: own data source + pipeline + leaves
+├── my_collection/                    # Self-contained: own data source + pipeline + leaves + output
 │   ├── collection.yaml               # data_dir, data_filter, title
 │   ├── registry.yaml                 # auto-synced: group order + tags
 │   ├── build_trials_df/              # Pipeline node (output_format: pipeline)
-│   └── my_analysis/                  # Leaf analysis
-│       ├── analysis.py
-│       ├── meta.yaml
-│       └── notes.md                  # Scientist's annotations (NEVER EDIT)
-├── another_collection/               # Another collection — different data source
-│   └── ...
-_output/                              # Generated (gitignored)
-├── my_collection/                    # Per-collection subtree (no cross-collection collisions)
-│   ├── index.html
-│   ├── build_trials_df/
-│   │   └── trials.pkl                # Artifact for downstream leaves to load
-│   └── my_analysis/
-│       ├── output.png
-│       └── stats.json
+│   ├── my_analysis/                  # Leaf analysis
+│   │   ├── analysis.py
+│   │   ├── meta.yaml
+│   │   └── notes.md                  # Scientist's annotations (NEVER EDIT)
+│   └── _output/                      # Generated (gitignored); collection-local, CWD-independent
+│       ├── index.html
+│       ├── build_trials_df/
+│       │   └── trials.pkl            # Artifact for downstream leaves to load
+│       └── my_analysis/
+│           ├── output.png
+│           └── stats.json
+└── another_collection/               # Another collection — its own _output/ subtree
+    └── ...
 ```
 
-**Collections.** Each collection is self-contained: it owns its `collection.yaml` (data source + title), its pipeline nodes, its leaf analyses, and its own `_output/<collection>/` subtree. No project-level `labdash.yaml` — data source config lives per-collection. Switch collections with `-c <collection_dir>` on any CLI command.
+**Collections.** Each collection is self-contained: it owns its `collection.yaml` (data source + title), its pipeline nodes, its leaf analyses, and its own collection-local `_output/` subtree. No project-level `labdash.yaml` — data source config lives per-collection. Switch collections with `-c <collection_dir>` on any CLI command.
 
 ## 3. The meta.yaml Format
 
@@ -790,7 +789,7 @@ Python pipeline. The standard pattern:
    suggestively, e.g. `export_parquet_for_r`.
 2. In the R collection's `collection.yaml`, set `data_dir:` to the
    path where that parquet lands (commonly something like
-   `../../_output/<py_collection>/export_parquet_for_r`).
+   `../<py_collection>/_output/export_parquet_for_r`).
 3. `_lib/data_loading.R` reads from `lab_collection_config()$data_dir`
    via `arrow::read_parquet`.
 
@@ -885,7 +884,7 @@ sign and write boilerplate that happens to flip when the user looks
 at the table.
 
 **How to verify.** Read the fitted model's `stats.json` at
-`_output/<collection>/<stat_slug>/stats.json` — it carries every
+`<collection>/_output/<stat_slug>/stats.json` — it carries every
 fixed-effect coefficient with its estimate, SE, and p-value. Take
 the sign of the `estimate` field for the coefficient you're
 describing. For an interaction term `A:B`, the sign tells you
@@ -906,3 +905,49 @@ required order of operations:
 
 Skipping the run-then-revise step is the most common way to ship a
 description that contradicts the very table it sits above.
+
+
+## 19. Conventions for sweep collections (parameter-sweep results)
+
+When a collection visualizes results of a parameter sweep (many cells
+= cross of config axes × replication seeds), follow these rules unless
+the scientist says otherwise. They exist because averaging over a
+scientific axis makes results impossible to interpret.
+
+**The averaging law — replication seeds are the ONLY axis ever
+averaged.** Never blind-average over a measurement axis (distance,
+steps-of-reasoning, etc.) or a swept config axis. To show one axis's
+effect, FIX all the others to wrapper-chosen values. To show a
+measurement axis, either PIN it (a wrapper variable) or PLOT IT IN
+FULL (on the x-axis or as per-line series) — never average it. A
+slope / regression-on-an-axis is a *summary* the scientist may not
+want; do not default to slope/heatmap cards.
+
+**The 5-view ladder for each MAIN result.** A result bearing the
+headline science gets five cards handling the swept axes + seeds while
+keeping the result's measurement axis on display and the
+series-of-interest overlaid: (1) full grid over all searched axes; (2)
+one swept axis as side-by-side panels, others fixed in the wrapper; (3)
+single fixed config; (4) single config showing ALL seeds (faint
+per-seed + bold mean); (5) single config + single seed. Non-main
+results (controls, time courses, per-pair) are single wrapper-settable
+cards. Implement views 1–2 with a generic grid engine taking a caller
+`draw_panel(ax, panel)` closure; view 5 reuses the view-3 engine with
+the seed pinned.
+
+**No agent-chosen "headline" figures.** The agent is bad at electing
+headlines — the scientist picks them, and they get no special status.
+Do not create a "headline"/"flagship" card. The **Overview** group is
+just the overall shape of the sweep (e.g. a raw summary table).
+
+**Group order + accuracy-first.** Pipeline → Sanity → Overview →
+Learning/training dynamics → the per-condition/result groups. Within a
+group, lead with accuracy (the primary DV), then secondary metrics;
+ladder views in order 1→5; time courses and per-pair after the ladders.
+
+**Every non-over-x card exposes the pin it depends on** (e.g. a `STEP`
+selector defaulting to the final checkpoint) so re-slicing is a
+one-line wrapper edit. Keep titles legible but not oversized.
+
+Record the same conventions in the collection's `AGENT_CONTEXT.md` so a
+future agent editing that collection inherits them.

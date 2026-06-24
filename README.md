@@ -62,7 +62,7 @@ labdash init my-project
 cd my-project
 mkdir -p data && echo '{"trials":[{"value":0.5},{"value":1.2}]}' > data/p1.json
 labdash build
-open _output/my-project/index.html
+open _output/index.html
 ```
 
 This creates a project with:
@@ -282,7 +282,7 @@ labdash build -c analysis/pilot1_test
 labdash serve -c analysis/headless_sim --port 8801
 ```
 
-When `collection.yaml` exists in the analyses directory, the output dir defaults to `_output/<collection_name>/` automatically, so same-named slugs in different collections don't collide.
+The output dir is collection-local and CWD-independent: it defaults to `<collection>/_output/` (inside the collection's own directory), so the location is a pure function of the collection path — building or serving from any working directory resolves to the same place.
 
 The `_lib/` directory is resolved by walking up from the collection directory, so shared code is automatically available to all collections.
 
@@ -386,7 +386,7 @@ labdash build accuracy_by_condition    # run only this one
 labdash build sde_plot rt_histogram    # run specific analyses
 ```
 
-Output goes to the `output_dir` specified in the active `collection.yaml` (default: `_output/<collection_name>/` when a `collection.yaml` is present). The generated `_output/<collection_name>/index.html` is a self-contained file you can open directly in a browser.
+Output goes to the `output_dir` specified in the active `collection.yaml` (default: `<collection>/_output/`, inside the collection directory and independent of the current working directory). The generated `<collection>/_output/index.html` is a self-contained file you can open directly in a browser.
 
 ### `labdash serve [--port PORT]`
 
